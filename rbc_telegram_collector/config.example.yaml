@@ -1,0 +1,18 @@
+# Список каналов для сбора (можно расширять)
+channels:
+  - name: "rbc_news"
+    url: "https://t.me/rbc_news"
+    enabled: true
+    # Если указать since, соберём посты начиная с этой даты (UTC).
+    # Формат: YYYY-MM-DD
+    since: "2026-01-01"
+    limit: 2500
+
+output:
+  data_dir: "data"
+  state_dir: "state"
+  # Форматы: jsonl, csv
+  formats: ["jsonl"]
+
+logging:
+  level: "INFO"

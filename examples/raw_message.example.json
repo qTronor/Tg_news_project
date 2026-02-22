@@ -1,0 +1,32 @@
+{
+  "event_id": "rbc_news:123456",
+  "event_type": "raw_message",
+  "event_timestamp": "2026-01-31T14:23:45.123Z",
+  "event_version": "v1.0.0",
+  "source_system": "telegram-collector",
+  "trace_id": "550e8400-e29b-41d4-a716-446655440000",
+  "payload": {
+    "message_id": 123456,
+    "channel": "rbc_news",
+    "text": "Центробанк повысил ключевую ставку до 18% на фоне роста инфляции. Решение было принято на заседании совета директоров ЦБ РФ.",
+    "date": "2026-01-31T14:20:00Z",
+    "views": 15420,
+    "forwards": 234,
+    "reactions": {
+      "👍": 45,
+      "🔥": 12,
+      "😱": 8
+    },
+    "media": {
+      "type": "photo",
+      "url": "https://cdn.rbc.ru/images/example.jpg",
+      "file_size": 524288,
+      "mime_type": "image/jpeg"
+    },
+    "edit_date": null,
+    "reply_to_message_id": null,
+    "author": null,
+    "is_forwarded": false,
+    "forward_from_channel": null
+  }
+}

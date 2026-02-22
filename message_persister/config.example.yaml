@@ -1,0 +1,45 @@
+service_name: "message-persister"
+consumer_id: "message-persister"
+source_system: "message-persister"
+event_version: "v1.0.0"
+
+kafka:
+  bootstrap_servers: "kafka:9093"
+  input_topic: "raw.telegram.messages"
+  output_topic: "persisted.messages"
+  dlq_topic: "dlq.raw.messages"
+  consumer_group: "message-persister-group"
+  client_id: "message-persister"
+  max_poll_records: 50
+  auto_offset_reset: "earliest"
+
+postgres:
+  host: "postgres"
+  port: 5432
+  database: "telegram_news"
+  user: "postgres"
+  password: "postgres"
+  min_size: 1
+  max_size: 5
+  command_timeout: 30
+
+schemas:
+  raw_message_path: "/app/schemas/raw_message.schema.json"
+  persisted_message_path: "/app/schemas/persisted_message.schema.json"
+
+retry:
+  max_attempts: 5
+  initial_backoff_seconds: 1.0
+  max_backoff_seconds: 30.0
+  backoff_multiplier: 2.0
+
+health:
+  host: "0.0.0.0"
+  port: 8000
+
+metrics:
+  host: "0.0.0.0"
+  port: 8001
+
+logging:
+  level: "INFO"

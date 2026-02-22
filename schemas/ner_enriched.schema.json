@@ -1,0 +1,228 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tg-news-project.local/schemas/ner_enriched.v1.json",
+  "title": "NER Enriched Event",
+  "description": "Message enriched with Named Entity Recognition results",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "event_timestamp",
+    "event_version",
+    "source_system",
+    "trace_id",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Unique event identifier: {channel}:{message_id}",
+      "pattern": "^[a-zA-Z0-9_]+:[0-9]+$"
+    },
+    "event_type": {
+      "type": "string",
+      "const": "ner_enriched",
+      "description": "Event type identifier"
+    },
+    "event_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when event was created (UTC)"
+    },
+    "event_version": {
+      "type": "string",
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Semantic version of the schema"
+    },
+    "source_system": {
+      "type": "string",
+      "description": "System that generated this event",
+      "examples": ["ner-extractor"]
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Distributed tracing ID for correlation"
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "message_id",
+        "channel",
+        "entities",
+        "model"
+      ],
+      "properties": {
+        "message_id": {
+          "type": "integer",
+          "description": "Telegram message ID",
+          "minimum": 1
+        },
+        "channel": {
+          "type": "string",
+          "description": "Telegram channel username",
+          "minLength": 1
+        },
+        "entities": {
+          "type": "array",
+          "description": "Extracted named entities",
+          "items": {
+            "type": "object",
+            "required": ["text", "type", "start", "end", "confidence"],
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Original entity text from message"
+              },
+              "type": {
+                "type": "string",
+                "description": "Entity type (NER class)",
+                "enum": [
+                  "PERSON",
+                  "ORG",
+                  "GPE",
+                  "LOC",
+                  "PRODUCT",
+                  "EVENT",
+                  "DATE",
+                  "TIME",
+                  "MONEY",
+                  "PERCENT",
+                  "QUANTITY",
+                  "ORDINAL",
+                  "CARDINAL"
+                ]
+              },
+              "start": {
+                "type": "integer",
+                "description": "Start character position in text",
+                "minimum": 0
+              },
+              "end": {
+                "type": "integer",
+                "description": "End character position in text",
+                "minimum": 0
+              },
+              "confidence": {
+                "type": "number",
+                "description": "Model confidence score",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "normalized": {
+                "type": ["string", "null"],
+                "description": "Normalized entity name (canonical form)"
+              },
+              "wikidata_id": {
+                "type": ["string", "null"],
+                "description": "Wikidata Q-identifier for entity linking",
+                "pattern": "^Q[0-9]+$"
+              },
+              "aliases": {
+                "type": "array",
+                "description": "Known aliases for this entity",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "metadata": {
+                "type": "object",
+                "description": "Additional entity metadata",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "relations": {
+          "type": "array",
+          "description": "Extracted semantic relations (subject-predicate-object triples)",
+          "items": {
+            "type": "object",
+            "required": ["subject", "predicate", "object"],
+            "properties": {
+              "subject": {
+                "type": "string",
+                "description": "Subject entity"
+              },
+              "predicate": {
+                "type": "string",
+                "description": "Relation/predicate (verb or semantic link)"
+              },
+              "object": {
+                "type": "string",
+                "description": "Object entity"
+              },
+              "confidence": {
+                "type": "number",
+                "description": "Relation extraction confidence",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "subject_type": {
+                "type": "string",
+                "description": "Subject entity type"
+              },
+              "object_type": {
+                "type": "string",
+                "description": "Object entity type"
+              }
+            }
+          }
+        },
+        "coreferences": {
+          "type": "array",
+          "description": "Coreference resolution results",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mention": {
+                "type": "string",
+                "description": "Mention text (e.g., 'он', 'компания')"
+              },
+              "entity": {
+                "type": "string",
+                "description": "Resolved entity"
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        },
+        "model": {
+          "type": "object",
+          "description": "NER model information",
+          "required": ["name", "version"],
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Model name",
+              "examples": ["deeppavlov-ner-ru", "spacy-ru-core"]
+            },
+            "version": {
+              "type": "string",
+              "description": "Model version"
+            },
+            "framework": {
+              "type": "string",
+              "description": "ML framework"
+            }
+          }
+        },
+        "extracted_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When NER extraction was performed"
+        },
+        "processing_time_ms": {
+          "type": "number",
+          "description": "Extraction time in milliseconds",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  message-persister:
+    build:
+      context: .
+      dockerfile: message_persister/Dockerfile
+    container_name: message-persister
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      MESSAGE_PERSISTER__KAFKA__BOOTSTRAP_SERVERS: "kafka:9093"
+      MESSAGE_PERSISTER__POSTGRES__HOST: "postgres"
+      MESSAGE_PERSISTER__POSTGRES__PORT: "5432"
+      MESSAGE_PERSISTER__POSTGRES__DATABASE: "${DB_NAME:-telegram_news}"
+      MESSAGE_PERSISTER__POSTGRES__USER: "${DB_USER:-postgres}"
+      MESSAGE_PERSISTER__POSTGRES__PASSWORD: "${DB_PASSWORD}"
+    volumes:
+      - ./message_persister/config.yaml:/app/message_persister/config.yaml:ro
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+    command: ["python", "/app/message_persister/main.py", "--config", "/app/message_persister/config.yaml"]
+    restart: unless-stopped
+    networks:
+      - telegram-news-network

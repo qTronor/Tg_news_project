@@ -1,0 +1,12 @@
+services:
+  telegram-collector:
+    build: .
+    environment:
+      TG_API_ID: "${TG_API_ID}"
+      TG_API_HASH: "${TG_API_HASH}"
+      # Preferred for non-interactive mode:
+      TG_STRING_SESSION: "${TG_STRING_SESSION}"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+      - ./state:/app/state

@@ -1,0 +1,72 @@
+{
+  "event_id": "ORG:Q4198",
+  "event_type": "graph_update",
+  "event_timestamp": "2026-01-31T14:23:49.000Z",
+  "event_version": "v1.0.0",
+  "source_system": "graph-builder",
+  "trace_id": "550e8400-e29b-41d4-a716-446655440000",
+  "payload": {
+    "operation": "MERGE",
+    "entity_type": "Entity",
+    "entity_id": "ORG:Q4198",
+    "properties": {
+      "entity_type": "ORG",
+      "original_text": "Центробанк",
+      "normalized_name": "Центральный банк России",
+      "wikidata_id": "Q4198",
+      "aliases": [
+        "ЦБ РФ",
+        "Банк России",
+        "Центробанк РФ"
+      ]
+    },
+    "labels": [
+      "Entity",
+      "Organization",
+      "CentralBank"
+    ],
+    "relationships": [
+      {
+        "type": "MENTIONED_IN",
+        "direction": "outgoing",
+        "target_type": "Message",
+        "target_id": "rbc_news:123456",
+        "properties": {
+          "position": 0,
+          "context": "повысил ключевую ставку до 18%",
+          "confidence": 0.98,
+          "sentiment": 0.32,
+          "timestamp": "2026-01-31T14:20:00Z"
+        },
+        "operation": "MERGE"
+      },
+      {
+        "type": "RELATES_TO",
+        "direction": "outgoing",
+        "target_type": "Entity",
+        "target_id": "PRODUCT:key_rate",
+        "properties": {
+          "predicate": "повысил",
+          "confidence": 0.92,
+          "source_message": "rbc_news:123456",
+          "timestamp": "2026-01-31T14:20:00Z"
+        },
+        "operation": "MERGE"
+      }
+    ],
+    "merge_strategy": {
+      "on_match": {
+        "last_seen": "2026-01-31T14:23:49.000Z",
+        "mention_count": "mention_count + 1",
+        "updated_at": "2026-01-31T14:23:49.000Z"
+      },
+      "on_create": {
+        "first_seen": "2026-01-31T14:23:49.000Z",
+        "mention_count": 1,
+        "avg_sentiment": 0.32,
+        "created_at": "2026-01-31T14:23:49.000Z"
+      }
+    },
+    "idempotency_key": "rbc_news:123456:ORG:Q4198"
+  }
+}

@@ -1,0 +1,196 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tg-news-project.local/schemas/sentiment_enriched.v1.json",
+  "title": "Sentiment Enriched Event",
+  "description": "Message enriched with sentiment analysis results",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "event_timestamp",
+    "event_version",
+    "source_system",
+    "trace_id",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Unique event identifier: {channel}:{message_id}",
+      "pattern": "^[a-zA-Z0-9_]+:[0-9]+$"
+    },
+    "event_type": {
+      "type": "string",
+      "const": "sentiment_enriched",
+      "description": "Event type identifier"
+    },
+    "event_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when event was created (UTC)"
+    },
+    "event_version": {
+      "type": "string",
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Semantic version of the schema"
+    },
+    "source_system": {
+      "type": "string",
+      "description": "System that generated this event",
+      "examples": ["sentiment-analyzer"]
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Distributed tracing ID for correlation"
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "message_id",
+        "channel",
+        "sentiment",
+        "model"
+      ],
+      "properties": {
+        "message_id": {
+          "type": "integer",
+          "description": "Telegram message ID",
+          "minimum": 1
+        },
+        "channel": {
+          "type": "string",
+          "description": "Telegram channel username",
+          "minLength": 1
+        },
+        "sentiment": {
+          "type": "object",
+          "description": "Sentiment analysis results",
+          "required": ["label", "score"],
+          "properties": {
+            "label": {
+              "type": "string",
+              "enum": ["positive", "negative", "neutral"],
+              "description": "Predicted sentiment class"
+            },
+            "score": {
+              "type": "number",
+              "description": "Confidence score for the predicted class",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "positive_prob": {
+              "type": "number",
+              "description": "Probability of positive sentiment",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "negative_prob": {
+              "type": "number",
+              "description": "Probability of negative sentiment",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "neutral_prob": {
+              "type": "number",
+              "description": "Probability of neutral sentiment",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "emotions": {
+          "type": ["object", "null"],
+          "description": "Fine-grained emotion detection",
+          "properties": {
+            "anger": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "fear": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "joy": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "sadness": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "surprise": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "disgust": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "aspects": {
+          "type": "array",
+          "description": "Aspect-based sentiment analysis",
+          "items": {
+            "type": "object",
+            "required": ["aspect", "sentiment"],
+            "properties": {
+              "aspect": {
+                "type": "string",
+                "description": "Detected aspect/topic"
+              },
+              "sentiment": {
+                "type": "string",
+                "enum": ["positive", "negative", "neutral"]
+              },
+              "score": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        },
+        "model": {
+          "type": "object",
+          "description": "ML model information",
+          "required": ["name", "version"],
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Model name",
+              "examples": ["rubert-tiny-sentiment"]
+            },
+            "version": {
+              "type": "string",
+              "description": "Model version"
+            },
+            "framework": {
+              "type": "string",
+              "description": "ML framework",
+              "examples": ["transformers", "pytorch"]
+            }
+          }
+        },
+        "analyzed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When sentiment analysis was performed"
+        },
+        "processing_time_ms": {
+          "type": "number",
+          "description": "Analysis time in milliseconds",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

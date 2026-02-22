@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  preprocessor:
+    build:
+      context: .
+      dockerfile: preprocessor/Dockerfile
+    container_name: preprocessor
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      PREPROCESSOR__KAFKA__BOOTSTRAP_SERVERS: "kafka:9093"
+      PREPROCESSOR__POSTGRES__HOST: "postgres"
+      PREPROCESSOR__POSTGRES__PORT: "5432"
+      PREPROCESSOR__POSTGRES__DATABASE: "${DB_NAME:-telegram_news}"
+      PREPROCESSOR__POSTGRES__USER: "${DB_USER:-postgres}"
+      PREPROCESSOR__POSTGRES__PASSWORD: "${DB_PASSWORD}"
+    volumes:
+      - ./preprocessor/config.example.yaml:/app/preprocessor/config.yaml:ro
+    ports:
+      - "8010:8010"
+      - "8011:8011"
+    command: ["python", "/app/preprocessor/main.py", "--config", "/app/preprocessor/config.yaml"]
+    restart: unless-stopped
+    networks:
+      - telegram-news-network

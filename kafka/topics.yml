@@ -1,0 +1,220 @@
+# Kafka Topics Configuration
+# Description: Topic definitions for Telegram News Pipeline
+# Version: 1.0.0
+# Date: 2026-01-31
+
+# Usage:
+# kafka-topics.sh --bootstrap-server localhost:9092 --create --config-file kafka/topics.yml
+
+---
+topics:
+  # =====================================================
+  # Main Data Pipeline Topics
+  # =====================================================
+  
+  - name: raw.telegram.messages
+    partitions: 6
+    replication_factor: 3
+    config:
+      retention.ms: 2592000000  # 30 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      max.message.bytes: 10485760  # 10MB
+      segment.ms: 86400000  # 1 day
+    description: Raw messages collected from Telegram channels
+    
+  - name: persisted.messages
+    partitions: 6
+    replication_factor: 3
+    config:
+      retention.ms: 604800000  # 7 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 86400000
+    description: Confirmation that messages were persisted to Postgres
+    
+  - name: preprocessed.messages
+    partitions: 6
+    replication_factor: 3
+    config:
+      retention.ms: 2592000000  # 30 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 86400000
+    description: Messages after text preprocessing
+    
+  - name: sentiment.enriched
+    partitions: 6
+    replication_factor: 3
+    config:
+      retention.ms: 2592000000  # 30 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 86400000
+    description: Messages enriched with sentiment analysis
+    
+  - name: ner.enriched
+    partitions: 6
+    replication_factor: 3
+    config:
+      retention.ms: 2592000000  # 30 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 86400000
+    description: Messages enriched with named entity recognition
+    
+  - name: graph.updates
+    partitions: 6
+    replication_factor: 3
+    config:
+      retention.ms: 604800000  # 7 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 86400000
+    description: Graph update commands for Neo4j
+    
+  # =====================================================
+  # Dead Letter Queue (DLQ) Topics
+  # =====================================================
+  
+  - name: dlq.raw.messages
+    partitions: 3
+    replication_factor: 3
+    config:
+      retention.ms: 7776000000  # 90 days (longer retention for investigation)
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 604800000  # 7 days
+    description: Failed raw message processing
+    
+  - name: dlq.preprocessing
+    partitions: 3
+    replication_factor: 3
+    config:
+      retention.ms: 7776000000  # 90 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 604800000
+    description: Failed preprocessing operations
+    
+  - name: dlq.sentiment
+    partitions: 3
+    replication_factor: 3
+    config:
+      retention.ms: 7776000000  # 90 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 604800000
+    description: Failed sentiment analysis
+    
+  - name: dlq.ner
+    partitions: 3
+    replication_factor: 3
+    config:
+      retention.ms: 7776000000  # 90 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 604800000
+    description: Failed NER extraction
+    
+  - name: dlq.graph
+    partitions: 3
+    replication_factor: 3
+    config:
+      retention.ms: 7776000000  # 90 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 604800000
+    description: Failed graph updates
+
+# =====================================================
+# Consumer Groups
+# =====================================================
+
+consumer_groups:
+  - name: message-persister-group
+    topics:
+      - raw.telegram.messages
+    description: Persists raw messages to Postgres
+    
+  - name: preprocessor-group
+    topics:
+      - raw.telegram.messages
+      - persisted.messages
+    description: Text preprocessing and cleaning
+    
+  - name: sentiment-analyzer-group
+    topics:
+      - preprocessed.messages
+    description: Sentiment analysis and emotion detection
+    
+  - name: ner-extractor-group
+    topics:
+      - preprocessed.messages
+    description: Named entity recognition and relation extraction
+    
+  - name: graph-builder-group
+    topics:
+      - sentiment.enriched
+      - ner.enriched
+    description: Builds knowledge graph updates
+    
+  - name: neo4j-writer-group
+    topics:
+      - graph.updates
+    description: Writes to Neo4j graph database
+    
+  - name: monitoring-group
+    topics:
+      - raw.telegram.messages
+      - persisted.messages
+      - preprocessed.messages
+      - sentiment.enriched
+      - ner.enriched
+      - graph.updates
+    description: Monitoring and metrics collection
+    
+  - name: dlq-manual-review-group
+    topics:
+      - dlq.raw.messages
+      - dlq.preprocessing
+      - dlq.sentiment
+      - dlq.ner
+      - dlq.graph
+    description: Manual review and retry of failed messages
+
+# =====================================================
+# Topic Creation Commands (for reference)
+# =====================================================
+
+# Main topics
+# kafka-topics.sh --bootstrap-server localhost:9092 --create \
+#   --topic raw.telegram.messages --partitions 6 --replication-factor 3 \
+#   --config retention.ms=2592000000 --config compression.type=lz4 \
+#   --config min.insync.replicas=2
+
+# DLQ topics
+# kafka-topics.sh --bootstrap-server localhost:9092 --create \
+#   --topic dlq.raw.messages --partitions 3 --replication-factor 3 \
+#   --config retention.ms=7776000000 --config compression.type=lz4 \
+#   --config min.insync.replicas=2
+
+# List all topics
+# kafka-topics.sh --bootstrap-server localhost:9092 --list
+
+# Describe a topic
+# kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic raw.telegram.messages
+
+# Delete a topic (use with caution!)
+# kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic <topic-name>

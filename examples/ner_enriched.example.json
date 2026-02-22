@@ -1,0 +1,130 @@
+{
+  "event_id": "rbc_news:123456",
+  "event_type": "ner_enriched",
+  "event_timestamp": "2026-01-31T14:23:48.500Z",
+  "event_version": "v1.0.0",
+  "source_system": "ner-extractor",
+  "trace_id": "550e8400-e29b-41d4-a716-446655440000",
+  "payload": {
+    "message_id": 123456,
+    "channel": "rbc_news",
+    "entities": [
+      {
+        "text": "Центробанк",
+        "type": "ORG",
+        "start": 0,
+        "end": 10,
+        "confidence": 0.98,
+        "normalized": "Центральный банк России",
+        "wikidata_id": "Q4198",
+        "aliases": [
+          "ЦБ РФ",
+          "Банк России",
+          "Центробанк РФ"
+        ],
+        "metadata": {
+          "type": "central_bank",
+          "country": "Russia"
+        }
+      },
+      {
+        "text": "ключевую ставку",
+        "type": "PRODUCT",
+        "start": 19,
+        "end": 34,
+        "confidence": 0.85,
+        "normalized": "ключевая ставка",
+        "wikidata_id": null,
+        "aliases": [
+          "базовая ставка",
+          "ставка ЦБ"
+        ]
+      },
+      {
+        "text": "18%",
+        "type": "PERCENT",
+        "start": 38,
+        "end": 41,
+        "confidence": 0.99,
+        "normalized": "0.18",
+        "wikidata_id": null,
+        "aliases": []
+      },
+      {
+        "text": "инфляции",
+        "type": "PRODUCT",
+        "start": 60,
+        "end": 68,
+        "confidence": 0.75,
+        "normalized": "инфляция",
+        "wikidata_id": "Q182192",
+        "aliases": [
+          "рост цен"
+        ]
+      },
+      {
+        "text": "совета директоров",
+        "type": "ORG",
+        "start": 106,
+        "end": 123,
+        "confidence": 0.82,
+        "normalized": "Совет директоров Банка России",
+        "wikidata_id": null,
+        "aliases": []
+      },
+      {
+        "text": "ЦБ РФ",
+        "type": "ORG",
+        "start": 124,
+        "end": 129,
+        "confidence": 0.97,
+        "normalized": "Центральный банк России",
+        "wikidata_id": "Q4198",
+        "aliases": [
+          "Центробанк",
+          "Банк России"
+        ]
+      }
+    ],
+    "relations": [
+      {
+        "subject": "Центробанк",
+        "predicate": "повысил",
+        "object": "ключевую ставку",
+        "confidence": 0.92,
+        "subject_type": "ORG",
+        "object_type": "PRODUCT"
+      },
+      {
+        "subject": "ключевая ставка",
+        "predicate": "составляет",
+        "object": "18%",
+        "confidence": 0.88,
+        "subject_type": "PRODUCT",
+        "object_type": "PERCENT"
+      },
+      {
+        "subject": "решение",
+        "predicate": "принято",
+        "object": "совета директоров",
+        "confidence": 0.79,
+        "subject_type": "EVENT",
+        "object_type": "ORG"
+      }
+    ],
+    "coreferences": [
+      {
+        "mention": "ЦБ РФ",
+        "entity": "Центробанк",
+        "confidence": 0.95
+      }
+    ],
+    "model": {
+      "name": "deeppavlov-ner-ru",
+      "version": "0.17.0",
+      "framework": "deeppavlov"
+    },
+    "extracted_at": "2026-01-31T14:23:48.500Z",
+    "processing_time_ms": 235.8
+  }
+}

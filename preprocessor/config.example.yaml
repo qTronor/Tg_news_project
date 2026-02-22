@@ -1,0 +1,49 @@
+service_name: "preprocessor"
+consumer_id: "preprocessor"
+source_system: "preprocessor"
+event_version: "v1.0.0"
+
+preprocessing:
+  version: "1.0.0"
+
+kafka:
+  bootstrap_servers: "localhost:9092"
+  input_topics:
+    - "raw.telegram.messages"
+    - "persisted.messages"
+  output_topic: "preprocessed.messages"
+  dlq_topic: "dlq.preprocessing"
+  consumer_group: "preprocessor-group"
+  client_id: "preprocessor"
+  max_poll_records: 50
+  poll_timeout_ms: 1000
+  auto_offset_reset: "earliest"
+  session_timeout_ms: 10000
+  request_timeout_ms: 30000
+  max_partition_fetch_bytes: 10485760
+
+postgres:
+  host: "localhost"
+  port: 5432
+  database: "telegram_news"
+  user: "postgres"
+  password: "postgres"
+  min_size: 1
+  max_size: 5
+  command_timeout: 30
+
+metrics:
+  host: "0.0.0.0"
+  port: 8011
+
+health:
+  host: "0.0.0.0"
+  port: 8010
+
+schemas:
+  raw_message_path: "schemas/raw_message.schema.json"
+  persisted_message_path: "schemas/persisted_message.schema.json"
+  preprocessed_message_path: "schemas/preprocessed_message.schema.json"
+
+logging:
+  level: "INFO"

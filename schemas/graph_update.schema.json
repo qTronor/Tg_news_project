@@ -1,0 +1,182 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tg-news-project.local/schemas/graph_update.v1.json",
+  "title": "Graph Update Event",
+  "description": "Command to create/update nodes and relationships in Neo4j knowledge graph",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "event_timestamp",
+    "event_version",
+    "source_system",
+    "trace_id",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Unique event identifier: {entity_type}:{entity_id}",
+      "pattern": "^[A-Z_]+:[a-zA-Z0-9_:-]+$",
+      "examples": ["ORG:Q4198", "MESSAGE:rbc_news:123456"]
+    },
+    "event_type": {
+      "type": "string",
+      "const": "graph_update",
+      "description": "Event type identifier"
+    },
+    "event_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when event was created (UTC)"
+    },
+    "event_version": {
+      "type": "string",
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Semantic version of the schema"
+    },
+    "source_system": {
+      "type": "string",
+      "description": "System that generated this event",
+      "examples": ["graph-builder"]
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Distributed tracing ID for correlation"
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "operation",
+        "entity_type",
+        "entity_id",
+        "properties"
+      ],
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": ["CREATE", "MERGE", "UPDATE", "DELETE"],
+          "description": "Graph operation type (Cypher operation)"
+        },
+        "entity_type": {
+          "type": "string",
+          "description": "Neo4j node label",
+          "enum": ["Message", "Entity", "Channel", "Topic", "Person", "Organization", "Location"],
+          "examples": ["Entity", "Message"]
+        },
+        "entity_id": {
+          "type": "string",
+          "description": "Unique entity identifier",
+          "minLength": 1
+        },
+        "properties": {
+          "type": "object",
+          "description": "Node properties to set",
+          "additionalProperties": true,
+          "examples": [
+            {
+              "name": "Центральный банк России",
+              "aliases": ["ЦБ РФ", "Центробанк"],
+              "wikidata_id": "Q4198"
+            }
+          ]
+        },
+        "labels": {
+          "type": "array",
+          "description": "Additional labels to add to the node",
+          "items": {
+            "type": "string"
+          }
+        },
+        "relationships": {
+          "type": "array",
+          "description": "Relationships to create/update",
+          "items": {
+            "type": "object",
+            "required": ["type", "target_type", "target_id"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "Relationship type",
+                "examples": [
+                  "MENTIONED_IN",
+                  "POSTED_IN",
+                  "RELATES_TO",
+                  "CO_OCCURS_WITH",
+                  "REPLIES_TO",
+                  "BELONGS_TO_TOPIC"
+                ]
+              },
+              "direction": {
+                "type": "string",
+                "enum": ["outgoing", "incoming", "undirected"],
+                "default": "outgoing",
+                "description": "Relationship direction"
+              },
+              "target_type": {
+                "type": "string",
+                "description": "Target node label",
+                "examples": ["Message", "Entity", "Channel"]
+              },
+              "target_id": {
+                "type": "string",
+                "description": "Target node unique identifier"
+              },
+              "properties": {
+                "type": "object",
+                "description": "Relationship properties",
+                "additionalProperties": true
+              },
+              "operation": {
+                "type": "string",
+                "enum": ["CREATE", "MERGE", "UPDATE", "DELETE"],
+                "default": "MERGE",
+                "description": "Relationship operation"
+              }
+            }
+          }
+        },
+        "merge_strategy": {
+          "type": "object",
+          "description": "Strategy for MERGE operations",
+          "properties": {
+            "on_match": {
+              "type": "object",
+              "description": "Properties to set when node/relationship exists",
+              "additionalProperties": true
+            },
+            "on_create": {
+              "type": "object",
+              "description": "Properties to set when creating new node/relationship",
+              "additionalProperties": true
+            }
+          }
+        },
+        "conditions": {
+          "type": "object",
+          "description": "Conditions for conditional updates",
+          "properties": {
+            "if_property_greater": {
+              "type": "object",
+              "description": "Update only if property value is greater",
+              "additionalProperties": true
+            },
+            "if_property_exists": {
+              "type": "array",
+              "description": "Update only if properties exist",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "idempotency_key": {
+          "type": "string",
+          "description": "Key for idempotent updates (prevents duplicate operations)"
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

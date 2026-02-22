@@ -1,0 +1,151 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tg-news-project.local/schemas/raw_message.v1.json",
+  "title": "Raw Telegram Message Event",
+  "description": "Schema for raw messages collected from Telegram channels",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "event_timestamp",
+    "event_version",
+    "source_system",
+    "trace_id",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Unique event identifier: {channel}:{message_id}",
+      "pattern": "^[a-zA-Z0-9_]+:[0-9]+$",
+      "examples": ["rbc_news:123456"]
+    },
+    "event_type": {
+      "type": "string",
+      "const": "raw_message",
+      "description": "Event type identifier"
+    },
+    "event_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when event was created (UTC)"
+    },
+    "event_version": {
+      "type": "string",
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Semantic version of the schema",
+      "examples": ["v1.0.0"]
+    },
+    "source_system": {
+      "type": "string",
+      "description": "System that generated this event",
+      "examples": ["telegram-collector"]
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Distributed tracing ID for correlation"
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "message_id",
+        "channel",
+        "text",
+        "date"
+      ],
+      "properties": {
+        "message_id": {
+          "type": "integer",
+          "description": "Telegram message ID",
+          "minimum": 1
+        },
+        "channel": {
+          "type": "string",
+          "description": "Telegram channel username without @",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "text": {
+          "type": ["string", "null"],
+          "description": "Message text content"
+        },
+        "date": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Message publication date (ISO 8601)"
+        },
+        "views": {
+          "type": "integer",
+          "description": "Number of views",
+          "minimum": 0,
+          "default": 0
+        },
+        "forwards": {
+          "type": "integer",
+          "description": "Number of forwards",
+          "minimum": 0,
+          "default": 0
+        },
+        "reactions": {
+          "type": ["object", "null"],
+          "description": "Emoji reactions with counts",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "examples": [{"👍": 45, "🔥": 12}]
+        },
+        "media": {
+          "type": ["object", "null"],
+          "description": "Media attachment information",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["photo", "video", "document", "audio", "voice", "sticker", "animation"],
+              "description": "Media type"
+            },
+            "url": {
+              "type": ["string", "null"],
+              "format": "uri",
+              "description": "Media URL (if available)"
+            },
+            "file_size": {
+              "type": ["integer", "null"],
+              "description": "File size in bytes",
+              "minimum": 0
+            },
+            "mime_type": {
+              "type": ["string", "null"],
+              "description": "MIME type"
+            }
+          }
+        },
+        "edit_date": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Last edit timestamp (if edited)"
+        },
+        "reply_to_message_id": {
+          "type": ["integer", "null"],
+          "description": "ID of the message this is replying to",
+          "minimum": 1
+        },
+        "author": {
+          "type": ["string", "null"],
+          "description": "Message author (if available)"
+        },
+        "is_forwarded": {
+          "type": "boolean",
+          "description": "Whether this message is forwarded",
+          "default": false
+        },
+        "forward_from_channel": {
+          "type": ["string", "null"],
+          "description": "Original channel if forwarded"
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

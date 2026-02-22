@@ -1,0 +1,60 @@
+# Docker Compose для микросервиса с брокером сообщений
+
+version: '3.8'
+
+services:
+  # RabbitMQ брокер
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: telegram-collector-rabbitmq
+    ports:
+      - "5672:5672"      # AMQP порт
+      - "15672:15672"    # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Telegram Collector микросервис
+  telegram-collector:
+    build: .
+    container_name: telegram-collector-service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      TG_API_ID: "${TG_API_ID}"
+      TG_API_HASH: "${TG_API_HASH}"
+      TG_STRING_SESSION: "${TG_STRING_SESSION}"
+      # Переменные для брокера
+      BROKER_HOST: "rabbitmq"
+      BROKER_PORT: "5672"
+    volumes:
+      - ./config.microservice.yaml:/app/config.yaml:ro
+      - ./state:/app/state
+      # data можно убрать, если не сохраняем локально
+      - ./data:/app/data
+    # Запуск как долгоживущий сервис (вместо одноразового collect)
+    command: ["python", "-m", "collector.service"]
+    restart: unless-stopped
+
+  # Пример потребителя сообщений (опционально)
+  # message-processor:
+  #   image: your-message-processor:latest
+  #   depends_on:
+  #     - rabbitmq
+  #   environment:
+  #     BROKER_HOST: "rabbitmq"
+  #     BROKER_PORT: "5672"
+  #     QUEUE_NAME: "telegram_messages_queue"
+
+volumes:
+  rabbitmq_data:
+
+

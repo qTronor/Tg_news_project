@@ -1,0 +1,164 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tg-news-project.local/schemas/preprocessed_message.v1.json",
+  "title": "Preprocessed Message Event",
+  "description": "Message after text preprocessing (cleaning, normalization, tokenization)",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "event_timestamp",
+    "event_version",
+    "source_system",
+    "trace_id",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Unique event identifier: {channel}:{message_id}",
+      "pattern": "^[a-zA-Z0-9_]+:[0-9]+$"
+    },
+    "event_type": {
+      "type": "string",
+      "const": "preprocessed",
+      "description": "Event type identifier"
+    },
+    "event_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when event was created (UTC)"
+    },
+    "event_version": {
+      "type": "string",
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Semantic version of the schema"
+    },
+    "source_system": {
+      "type": "string",
+      "description": "System that generated this event",
+      "examples": ["preprocessor"]
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Distributed tracing ID for correlation"
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "message_id",
+        "channel",
+        "original_text",
+        "cleaned_text",
+        "language",
+        "word_count"
+      ],
+      "properties": {
+        "message_id": {
+          "type": "integer",
+          "description": "Telegram message ID",
+          "minimum": 1
+        },
+        "channel": {
+          "type": "string",
+          "description": "Telegram channel username",
+          "minLength": 1
+        },
+        "original_text": {
+          "type": "string",
+          "description": "Original message text"
+        },
+        "cleaned_text": {
+          "type": "string",
+          "description": "Text after cleaning (lowercased, punctuation removed, etc.)"
+        },
+        "normalized_text": {
+          "type": ["string", "null"],
+          "description": "Text after lemmatization/stemming"
+        },
+        "language": {
+          "type": "string",
+          "description": "Detected language code (ISO 639-1)",
+          "pattern": "^[a-z]{2}$",
+          "examples": ["ru", "en"]
+        },
+        "tokens": {
+          "type": "array",
+          "description": "Tokenized words",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sentences_count": {
+          "type": "integer",
+          "description": "Number of sentences",
+          "minimum": 0
+        },
+        "word_count": {
+          "type": "integer",
+          "description": "Number of words",
+          "minimum": 0
+        },
+        "has_urls": {
+          "type": "boolean",
+          "description": "Whether text contains URLs",
+          "default": false
+        },
+        "has_mentions": {
+          "type": "boolean",
+          "description": "Whether text contains @mentions",
+          "default": false
+        },
+        "has_hashtags": {
+          "type": "boolean",
+          "description": "Whether text contains #hashtags",
+          "default": false
+        },
+        "urls": {
+          "type": "array",
+          "description": "Extracted URLs",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "mentions": {
+          "type": "array",
+          "description": "Extracted @mentions",
+          "items": {
+            "type": "string"
+          }
+        },
+        "hashtags": {
+          "type": "array",
+          "description": "Extracted #hashtags",
+          "items": {
+            "type": "string"
+          }
+        },
+        "preprocessing_metadata": {
+          "type": "object",
+          "description": "Metadata about preprocessing pipeline",
+          "properties": {
+            "version": {
+              "type": "string",
+              "description": "Preprocessor version"
+            },
+            "timestamp": {
+              "type": "string",
+              "format": "date-time",
+              "description": "When preprocessing was performed"
+            },
+            "duration_ms": {
+              "type": "number",
+              "description": "Processing time in milliseconds",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

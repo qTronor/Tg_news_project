@@ -1,0 +1,48 @@
+# Пример конфигурации для микросервиса с брокером сообщений
+
+channels:
+  - name: "rbc_news"
+    url: "https://t.me/rbc_news"
+    enabled: true
+    since: "2026-01-01"
+    limit: 2500
+
+# Конфигурация брокера сообщений
+broker:
+  type: "rabbitmq"  # или "kafka", "redis"
+  host: "rabbitmq"  # имя сервиса в docker-compose
+  port: 5672
+  username: "guest"
+  password: "guest"
+  virtual_host: "/"
+  exchange: "telegram_messages"
+  routing_key_template: "{channel}"  # будет "rbc_news" для канала rbc_news
+  # Альтернативные варианты:
+  # routing_key_template: "telegram.{channel}"
+  # routing_key_template: "news.{channel}"
+
+# Планировщик для периодического сбора
+scheduler:
+  enabled: true
+  interval_seconds: 300  # каждые 5 минут
+  # или использовать cron-формат:
+  # cron: "*/5 * * * *"  # каждые 5 минут
+
+# API для управления (опционально)
+api:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8000
+
+# Локальное сохранение (можно отключить, если используем только брокер)
+output:
+  data_dir: "data"
+  state_dir: "state"
+  formats: []  # пустой список = не сохранять локально
+  # или оставить для бэкапа:
+  # formats: ["jsonl"]
+
+logging:
+  level: "INFO"
+
+

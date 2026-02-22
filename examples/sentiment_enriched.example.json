@@ -1,0 +1,46 @@
+{
+  "event_id": "rbc_news:123456",
+  "event_type": "sentiment_enriched",
+  "event_timestamp": "2026-01-31T14:23:48.100Z",
+  "event_version": "v1.0.0",
+  "source_system": "sentiment-analyzer",
+  "trace_id": "550e8400-e29b-41d4-a716-446655440000",
+  "payload": {
+    "message_id": 123456,
+    "channel": "rbc_news",
+    "sentiment": {
+      "label": "negative",
+      "score": 0.68,
+      "positive_prob": 0.12,
+      "negative_prob": 0.68,
+      "neutral_prob": 0.20
+    },
+    "emotions": {
+      "anger": 0.05,
+      "fear": 0.32,
+      "joy": 0.08,
+      "sadness": 0.15,
+      "surprise": 0.28,
+      "disgust": 0.03
+    },
+    "aspects": [
+      {
+        "aspect": "ключевая ставка",
+        "sentiment": "negative",
+        "score": 0.72
+      },
+      {
+        "aspect": "инфляция",
+        "sentiment": "negative",
+        "score": 0.65
+      }
+    ],
+    "model": {
+      "name": "rubert-tiny-sentiment",
+      "version": "1.0.2",
+      "framework": "transformers"
+    },
+    "analyzed_at": "2026-01-31T14:23:48.100Z",
+    "processing_time_ms": 127.5
+  }
+}
