@@ -41,6 +41,7 @@ config.yaml
 data/
 state/
 logs/
+lake/
 *.log
 
 # Database

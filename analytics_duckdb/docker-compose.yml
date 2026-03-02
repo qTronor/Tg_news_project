@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  analytics-duckdb:
+    build:
+      context: .
+      dockerfile: analytics_duckdb/Dockerfile
+    container_name: analytics-duckdb
+    environment:
+      ANALYTICS_DUCKDB__LAKE_PATH: "/lake"
+      ANALYTICS_DUCKDB__DUCKDB__THREADS: "${DUCKDB_THREADS:-4}"
+      ANALYTICS_DUCKDB__DUCKDB__MEMORY_LIMIT: "${DUCKDB_MEMORY_LIMIT:-1GB}"
+      ANALYTICS_DUCKDB__API__PORT: "8020"
+    volumes:
+      - ./analytics_duckdb/config.example.yaml:/app/analytics_duckdb/config.yaml:ro
+      - ./lake:/lake
+    ports:
+      - "8020:8020"
+    command: ["python", "/app/analytics_duckdb/main.py", "--config", "/app/analytics_duckdb/config.yaml"]
+    restart: unless-stopped
