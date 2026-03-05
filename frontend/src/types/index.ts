@@ -95,7 +95,45 @@ export interface TimeRange {
 
 export interface AppConfig {
   api_base_url: string;
+  auth_base_url: string;
   polling_interval_ms: number;
   theme: "light" | "dark" | "system";
   watched_channels: string[];
+}
+
+export type UserRole = "admin" | "user";
+
+export interface UserProfile {
+  id: string;
+  email: string;
+  username: string;
+  role: UserRole;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface ReactionInfo {
+  message_event_id: string;
+  likes: number;
+  dislikes: number;
+  user_reaction: "like" | "dislike" | null;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  admin_id: string | null;
+  admin_username: string | null;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  old_value: Record<string, unknown> | null;
+  new_value: Record<string, unknown> | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
+export interface ChannelVisibility {
+  channel_name: string;
+  is_visible: boolean;
+  updated_at: string | null;
 }

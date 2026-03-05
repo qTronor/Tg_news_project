@@ -2,18 +2,29 @@
 
 import { useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import { useTranslation } from "@/lib/i18n";
 import { Header } from "@/components/layout/header";
 import { PageTransition } from "@/components/layout/page-transition";
 import { useGraph } from "@/lib/use-data";
 import { Search, Loader2 } from "lucide-react";
 import dynamic from "next/dynamic";
 
+function GraphViewLoading() {
+  const { t } = useTranslation();
+  return (
+    <div className="w-full h-full flex items-center justify-center text-muted-foreground">
+      {t("graph.loadingGraph")}
+    </div>
+  );
+}
+
 const GraphView = dynamic(
   () => import("@/components/graph/graph-view").then(m => ({ default: m.GraphView })),
-  { ssr: false, loading: () => <div className="w-full h-full flex items-center justify-center text-muted-foreground">Loading graph...</div> }
+  { ssr: false, loading: () => <GraphViewLoading /> }
 );
 
 function GraphContent() {
+  const { t } = useTranslation();
   const searchParams = useSearchParams();
   const focusParam = searchParams.get("focus") || undefined;
   const [search, setSearch] = useState("");
@@ -42,7 +53,7 @@ function GraphContent() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <input
             type="text"
-            placeholder="Search node..."
+            placeholder={t("graph.searchNode")}
             value={search}
             onChange={e => setSearch(e.target.value)}
             className="w-full pl-9 pr-4 py-2 bg-card border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-primary/30 transition-all"
@@ -50,7 +61,7 @@ function GraphContent() {
         </div>
 
         <div className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">Depth:</span>
+          <span className="text-muted-foreground">{t("graph.depth")}:</span>
           {[1, 2, 3].map(d => (
             <button
               key={d}
@@ -66,9 +77,9 @@ function GraphContent() {
 
         <div className="flex items-center gap-3 text-sm">
           {[
-            { key: "topics", label: "Topics", value: showTopics, set: setShowTopics },
-            { key: "channels", label: "Channels", value: showChannels, set: setShowChannels },
-            { key: "entities", label: "Entities", value: showEntities, set: setShowEntities },
+            { key: "topics", label: t("graph.topics"), value: showTopics, set: setShowTopics },
+            { key: "channels", label: t("graph.channels"), value: showChannels, set: setShowChannels },
+            { key: "entities", label: t("graph.entities"), value: showEntities, set: setShowEntities },
           ].map(f => (
             <label key={f.key} className="flex items-center gap-1.5 cursor-pointer">
               <input
@@ -97,11 +108,12 @@ function GraphContent() {
 }
 
 export default function GraphPage() {
+  const { t } = useTranslation();
   return (
     <>
-      <Header title="Entity Graph" />
+      <Header title={t("graph.title")} />
       <PageTransition>
-        <Suspense fallback={<div className="p-6 text-muted-foreground">Loading...</div>}>
+        <Suspense fallback={<div className="p-6 text-muted-foreground">{t("graph.loading")}</div>}>
           <GraphContent />
         </Suspense>
       </PageTransition>

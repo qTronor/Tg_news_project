@@ -152,6 +152,64 @@ services:
       - telegram-news-network
 
   # =====================================================
+  # Frontend - Next.js Web Application
+  # =====================================================
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://host.docker.internal:${ANALYTICS_PORT:-8020}
+        NEXT_PUBLIC_AUTH_BASE_URL: http://host.docker.internal:${AUTH_PORT:-8030}
+        NEXT_PUBLIC_POLLING_INTERVAL: ${POLLING_INTERVAL:-15000}
+    container_name: telegram-news-frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000',r=>{process.exit(r.statusCode===200?0:1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+  # =====================================================
+  # Auth Service - User Authentication & Authorization
+  # =====================================================
+  auth-service:
+    build: ./auth_service
+    container_name: telegram-news-auth
+    ports:
+      - "${AUTH_PORT:-8030}:8030"
+    environment:
+      AUTH_DATABASE_URL: postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD:?Database password required}@postgres:5432/tg_news_auth
+      AUTH_JWT_SECRET_KEY: ${AUTH_JWT_SECRET:?Auth JWT secret required}
+      AUTH_JWT_ALGORITHM: HS256
+      AUTH_ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      AUTH_REFRESH_TOKEN_EXPIRE_DAYS: 30
+      AUTH_CORS_ORIGINS: '["http://localhost:3000"]'
+      AUTH_RATE_LIMIT_PER_MINUTE: 30
+      AUTH_ADMIN_BOOTSTRAP_EMAIL: ${ADMIN_EMAIL:-}
+      AUTH_ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_PASSWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8030/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+  # =====================================================
   # Redis - Caching & Deduplication
   # =====================================================
   redis:

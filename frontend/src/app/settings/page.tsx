@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslation } from "@/lib/i18n";
 import { Header } from "@/components/layout/header";
 import { PageTransition } from "@/components/layout/page-transition";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -10,6 +11,7 @@ import { motion } from "framer-motion";
 import { useTheme } from "next-themes";
 
 export default function SettingsPage() {
+  const { t } = useTranslation();
   const { theme, setTheme } = useTheme();
   const { isDemo, setIsDemo } = useDemoContext();
   const [apiUrl, setApiUrl] = useState("http://localhost:8020");
@@ -39,20 +41,20 @@ export default function SettingsPage() {
 
   return (
     <>
-      <Header title="Settings" />
+      <Header title={t("settings.title")} />
       <PageTransition>
         <div className="p-6 space-y-6 max-w-3xl">
           <Card>
             <CardHeader>
               <div className="flex items-center gap-2">
                 <Server className="w-4 h-4 text-primary" />
-                <CardTitle>Connection</CardTitle>
+                <CardTitle>{t("settings.connection")}</CardTitle>
               </div>
-              <CardDescription>Configure the analytics API endpoint</CardDescription>
+              <CardDescription>{t("settings.connectionDesc")}</CardDescription>
             </CardHeader>
             <div className="space-y-4">
               <div>
-                <label className="text-xs font-medium text-muted-foreground">API Base URL</label>
+                <label className="text-xs font-medium text-muted-foreground">{t("settings.apiBaseUrl")}</label>
                 <input
                   type="text"
                   value={apiUrl}
@@ -61,7 +63,7 @@ export default function SettingsPage() {
                 />
               </div>
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Polling Interval (seconds)</label>
+                <label className="text-xs font-medium text-muted-foreground">{t("settings.pollingInterval")}</label>
                 <input
                   type="number"
                   value={pollingInterval}
@@ -71,8 +73,8 @@ export default function SettingsPage() {
               </div>
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-medium text-foreground">Demo Mode</p>
-                  <p className="text-xs text-muted-foreground">Use mock data instead of live API</p>
+                  <p className="text-sm font-medium text-foreground">{t("settings.demoMode")}</p>
+                  <p className="text-xs text-muted-foreground">{t("settings.demoModeDesc")}</p>
                 </div>
                 <button
                   onClick={() => setIsDemo(!isDemo)}
@@ -92,9 +94,9 @@ export default function SettingsPage() {
             <CardHeader>
               <div className="flex items-center gap-2">
                 <Database className="w-4 h-4 text-primary" />
-                <CardTitle>Watched Channels</CardTitle>
+                <CardTitle>{t("settings.watchedChannels")}</CardTitle>
               </div>
-              <CardDescription>Manage the Telegram channels being monitored</CardDescription>
+              <CardDescription>{t("settings.watchedChannelsDesc")}</CardDescription>
             </CardHeader>
             <div className="space-y-3">
               <div className="flex gap-2">
@@ -103,7 +105,7 @@ export default function SettingsPage() {
                   value={newChannel}
                   onChange={e => setNewChannel(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && addChannel()}
-                  placeholder="Add channel name..."
+                  placeholder={t("settings.addChannel")}
                   className="flex-1 px-3 py-2 bg-muted rounded-lg text-sm text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-primary/30 transition-all"
                 />
                 <motion.button
@@ -138,14 +140,14 @@ export default function SettingsPage() {
             <CardHeader>
               <div className="flex items-center gap-2">
                 <Bell className="w-4 h-4 text-primary" />
-                <CardTitle>Notifications</CardTitle>
+                <CardTitle>{t("settings.notifications")}</CardTitle>
               </div>
-              <CardDescription>Alert settings for new topic detection</CardDescription>
+              <CardDescription>{t("settings.notificationsDesc")}</CardDescription>
             </CardHeader>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-foreground">New Topic Alerts</p>
-                <p className="text-xs text-muted-foreground">Get notified when a new topic cluster is detected</p>
+                <p className="text-sm font-medium text-foreground">{t("settings.newTopicAlerts")}</p>
+                <p className="text-xs text-muted-foreground">{t("settings.newTopicAlertsDesc")}</p>
               </div>
               <button
                 onClick={() => setNotifications(!notifications)}
@@ -164,7 +166,7 @@ export default function SettingsPage() {
             <CardHeader>
               <div className="flex items-center gap-2">
                 <Palette className="w-4 h-4 text-primary" />
-                <CardTitle>Appearance</CardTitle>
+                <CardTitle>{t("settings.appearance")}</CardTitle>
               </div>
             </CardHeader>
             <div className="flex gap-3">
@@ -193,7 +195,7 @@ export default function SettingsPage() {
             }`}
           >
             <Save className="w-4 h-4" />
-            {saved ? "Saved!" : "Save Settings"}
+            {saved ? t("settings.saved") : t("settings.save")}
           </motion.button>
         </div>
       </PageTransition>

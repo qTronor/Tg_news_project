@@ -1,0 +1,345 @@
+"use client";
+
+import { createContext, useContext } from "react";
+
+export type Locale = "ru" | "en";
+
+const dictionaries = {
+  ru: {
+    // Nav
+    "nav.dashboard": "Дашборд",
+    "nav.feed": "Лента",
+    "nav.topics": "Темы",
+    "nav.entities": "Сущности",
+    "nav.graph": "Граф",
+    "nav.settings": "Настройки",
+    "nav.channels": "Каналы",
+    "nav.audit": "Аудит",
+    "nav.admin": "АДМИН",
+
+    // Header
+    "header.demo": "Демо",
+    "header.live": "Live",
+    "header.logout": "Выйти",
+    "header.switchToDemo": "Перейти в Демо",
+
+    // Dashboard
+    "dash.messagesToday": "Сообщений сегодня",
+    "dash.newTopics": "Новые темы (24ч)",
+    "dash.activeChannels": "Активные каналы",
+    "dash.avgSentiment": "Средн. тональность",
+    "dash.sentimentDynamics": "Динамика тональности",
+    "dash.topEntities": "Топ сущностей",
+    "dash.topTopics": "Топ тем",
+    "dash.channelActivity": "Активность каналов",
+
+    // Feed
+    "feed.title": "Лента",
+    "feed.search": "Поиск сообщений...",
+    "feed.allChannels": "Все каналы",
+    "feed.allTopics": "Все темы",
+    "feed.live": "Live",
+    "feed.showing": "Показано",
+    "feed.messages": "сообщений",
+    "feed.liveApi": "(Live API)",
+    "feed.noMessages": "Нет сообщений по выбранным фильтрам.",
+    "feed.cannotReachApi": "Нет связи с API",
+    "feed.apiHint": "Убедитесь, что analytics_duckdb запущен, или переключитесь в Демо-режим.",
+    "feed.loading": "Загрузка...",
+
+    // Sentiment
+    "sentiment.positive": "Позитивная",
+    "sentiment.neutral": "Нейтральная",
+    "sentiment.negative": "Негативная",
+    "sentiment.all": "Все",
+
+    // Topics
+    "topics.title": "Темы",
+    "topics.activeTopics": "активных тем",
+    "topics.messages": "сообщений",
+    "topics.channels": "каналов",
+    "topics.sentiment": "Тональность",
+    "topics.backToTopics": "Назад к темам",
+    "topics.viewInGraph": "Открыть в графе",
+    "topics.export": "Экспорт",
+    "topics.messageVolume": "Объём сообщений",
+    "topics.channelDistribution": "Распределение по каналам",
+    "topics.keyEntities": "Ключевые сущности",
+    "topics.relatedTopics": "Связанные темы",
+    "topics.representativeMessages": "Репрезентативные сообщения",
+    "topics.avgSentiment": "Средн. тональность",
+
+    // Entities
+    "entities.title": "Сущности",
+    "entities.search": "Поиск сущностей...",
+    "entities.entity": "Сущность",
+    "entities.type": "Тип",
+    "entities.mentions": "Упоминания",
+    "entities.topics": "Темы",
+    "entities.channels": "Каналы",
+    "entities.trend": "Тренд",
+    "entities.noEntities": "Сущности не найдены.",
+    "entities.backToEntities": "Назад к сущностям",
+    "entities.viewInGraph": "Открыть в графе",
+    "entities.relatedTopics": "Связанные темы",
+    "entities.recentMentions": "Последние упоминания",
+    "entities.noRelatedTopics": "Нет связанных тем.",
+    "entities.noRecentMentions": "Нет последних упоминаний.",
+
+    // Graph
+    "graph.title": "Граф сущностей",
+    "graph.searchNode": "Поиск узла...",
+    "graph.depth": "Глубина",
+    "graph.topics": "Темы",
+    "graph.channels": "Каналы",
+    "graph.entities": "Сущности",
+    "graph.loadingGraph": "Загрузка графа...",
+    "graph.loading": "Загрузка...",
+
+    // Settings
+    "settings.title": "Настройки",
+    "settings.connection": "Подключение",
+    "settings.connectionDesc": "Настройка API-эндпоинта аналитики",
+    "settings.apiBaseUrl": "API Base URL",
+    "settings.pollingInterval": "Интервал обновления (секунды)",
+    "settings.demoMode": "Демо-режим",
+    "settings.demoModeDesc": "Использовать тестовые данные вместо реального API",
+    "settings.watchedChannels": "Отслеживаемые каналы",
+    "settings.watchedChannelsDesc": "Управление мониторингом Telegram-каналов",
+    "settings.addChannel": "Добавить канал...",
+    "settings.notifications": "Уведомления",
+    "settings.notificationsDesc": "Настройка оповещений о новых темах",
+    "settings.newTopicAlerts": "Оповещения о новых темах",
+    "settings.newTopicAlertsDesc": "Уведомлять при обнаружении нового кластера тем",
+    "settings.appearance": "Внешний вид",
+    "settings.save": "Сохранить настройки",
+    "settings.saved": "Сохранено!",
+
+    // Admin
+    "admin.channels.title": "Управление каналами",
+    "admin.channels.telegram": "Каналы Telegram",
+    "admin.channels.search": "Поиск каналов...",
+    "admin.channels.newChannel": "Новый канал",
+    "admin.channels.add": "Добавить",
+    "admin.channels.visible": "Виден",
+    "admin.channels.hidden": "Скрыт",
+    "admin.channels.notFound": "Каналы не найдены",
+    "admin.channels.forbidden": "Эта страница доступна только администраторам.",
+    "admin.audit.title": "Журнал действий",
+    "admin.audit.subtitle": "Журнал аудита администраторов",
+    "admin.audit.empty": "Журнал пуст",
+    "admin.audit.loadMore": "Загрузить ещё",
+    "admin.audit.from": "от",
+    "admin.audit.forbidden": "Эта страница доступна только администраторам.",
+
+    // Edit modal
+    "edit.title": "Редактирование сообщения",
+    "edit.sentimentScore": "Тональность (score)",
+    "edit.sentimentLabel": "Тональность (label)",
+    "edit.topic": "Тема",
+    "edit.topicPlaceholder": "Название темы",
+    "edit.entities": "Сущности (через запятую)",
+    "edit.entitiesPlaceholder": "ЦБ РФ, Набиуллина, Москва",
+    "edit.cancel": "Отмена",
+    "edit.save": "Сохранить",
+    "edit.saveError": "Ошибка сохранения",
+
+    // Login
+    "login.signIn": "Вход",
+    "login.signUp": "Регистрация",
+    "login.email": "Email",
+    "login.username": "Имя пользователя",
+    "login.emailOrLogin": "Email или логин",
+    "login.password": "Пароль",
+    "login.minChars": "Минимум 8 символов",
+    "login.enterPassword": "Введите пароль",
+    "login.submit": "Войти",
+    "login.createAccount": "Создать аккаунт",
+    "login.noAccount": "Нет аккаунта?",
+    "login.haveAccount": "Уже есть аккаунт?",
+    "login.register": "Зарегистрироваться",
+    "login.signInLink": "Войти",
+    "login.footer": "Данные защищены шифрованием. RBAC-контроль доступа.",
+    "login.passwordMinError": "Пароль должен содержать минимум 8 символов",
+    "login.genericError": "Произошла ошибка",
+
+    // Common
+    "common.loading": "Загрузка...",
+    "common.msgs": "сообщ.",
+    "common.accessDenied": "Доступ запрещён",
+  },
+
+  en: {
+    "nav.dashboard": "Dashboard",
+    "nav.feed": "Feed",
+    "nav.topics": "Topics",
+    "nav.entities": "Entities",
+    "nav.graph": "Graph",
+    "nav.settings": "Settings",
+    "nav.channels": "Channels",
+    "nav.audit": "Audit",
+    "nav.admin": "ADMIN",
+
+    "header.demo": "Demo",
+    "header.live": "Live",
+    "header.logout": "Log out",
+    "header.switchToDemo": "Switch to Demo",
+
+    "dash.messagesToday": "Messages Today",
+    "dash.newTopics": "New Topics (24h)",
+    "dash.activeChannels": "Active Channels",
+    "dash.avgSentiment": "Avg Sentiment",
+    "dash.sentimentDynamics": "Sentiment Dynamics",
+    "dash.topEntities": "Top Entities",
+    "dash.topTopics": "Top Topics",
+    "dash.channelActivity": "Channel Activity",
+
+    "feed.title": "Feed",
+    "feed.search": "Search messages...",
+    "feed.allChannels": "All Channels",
+    "feed.allTopics": "All Topics",
+    "feed.live": "Live",
+    "feed.showing": "Showing",
+    "feed.messages": "messages",
+    "feed.liveApi": "(Live API)",
+    "feed.noMessages": "No messages match your filters.",
+    "feed.cannotReachApi": "Cannot reach API",
+    "feed.apiHint": "Make sure analytics_duckdb is running, or switch to Demo mode.",
+    "feed.loading": "Loading...",
+
+    "sentiment.positive": "Positive",
+    "sentiment.neutral": "Neutral",
+    "sentiment.negative": "Negative",
+    "sentiment.all": "All",
+
+    "topics.title": "Topics",
+    "topics.activeTopics": "active topics",
+    "topics.messages": "messages",
+    "topics.channels": "channels",
+    "topics.sentiment": "Sentiment",
+    "topics.backToTopics": "Back to Topics",
+    "topics.viewInGraph": "View in Graph",
+    "topics.export": "Export",
+    "topics.messageVolume": "Message Volume",
+    "topics.channelDistribution": "Channel Distribution",
+    "topics.keyEntities": "Key Entities",
+    "topics.relatedTopics": "Related Topics",
+    "topics.representativeMessages": "Representative Messages",
+    "topics.avgSentiment": "Avg sentiment",
+
+    "entities.title": "Entities",
+    "entities.search": "Search entities...",
+    "entities.entity": "Entity",
+    "entities.type": "Type",
+    "entities.mentions": "Mentions",
+    "entities.topics": "Topics",
+    "entities.channels": "Channels",
+    "entities.trend": "Trend",
+    "entities.noEntities": "No entities found.",
+    "entities.backToEntities": "Back to Entities",
+    "entities.viewInGraph": "View in Graph",
+    "entities.relatedTopics": "Related Topics",
+    "entities.recentMentions": "Recent Mentions",
+    "entities.noRelatedTopics": "No related topics found.",
+    "entities.noRecentMentions": "No recent mentions.",
+
+    "graph.title": "Entity Graph",
+    "graph.searchNode": "Search node...",
+    "graph.depth": "Depth",
+    "graph.topics": "Topics",
+    "graph.channels": "Channels",
+    "graph.entities": "Entities",
+    "graph.loadingGraph": "Loading graph...",
+    "graph.loading": "Loading...",
+
+    "settings.title": "Settings",
+    "settings.connection": "Connection",
+    "settings.connectionDesc": "Configure the analytics API endpoint",
+    "settings.apiBaseUrl": "API Base URL",
+    "settings.pollingInterval": "Polling Interval (seconds)",
+    "settings.demoMode": "Demo Mode",
+    "settings.demoModeDesc": "Use mock data instead of live API",
+    "settings.watchedChannels": "Watched Channels",
+    "settings.watchedChannelsDesc": "Manage the Telegram channels being monitored",
+    "settings.addChannel": "Add channel name...",
+    "settings.notifications": "Notifications",
+    "settings.notificationsDesc": "Alert settings for new topic detection",
+    "settings.newTopicAlerts": "New Topic Alerts",
+    "settings.newTopicAlertsDesc": "Get notified when a new topic cluster is detected",
+    "settings.appearance": "Appearance",
+    "settings.save": "Save Settings",
+    "settings.saved": "Saved!",
+
+    "admin.channels.title": "Channel Management",
+    "admin.channels.telegram": "Telegram Channels",
+    "admin.channels.search": "Search channels...",
+    "admin.channels.newChannel": "New channel",
+    "admin.channels.add": "Add",
+    "admin.channels.visible": "Visible",
+    "admin.channels.hidden": "Hidden",
+    "admin.channels.notFound": "No channels found",
+    "admin.channels.forbidden": "This page is available to administrators only.",
+    "admin.audit.title": "Audit Log",
+    "admin.audit.subtitle": "Administrator audit log",
+    "admin.audit.empty": "Audit log is empty",
+    "admin.audit.loadMore": "Load more",
+    "admin.audit.from": "by",
+    "admin.audit.forbidden": "This page is available to administrators only.",
+
+    "edit.title": "Edit Message",
+    "edit.sentimentScore": "Sentiment (score)",
+    "edit.sentimentLabel": "Sentiment (label)",
+    "edit.topic": "Topic",
+    "edit.topicPlaceholder": "Topic name",
+    "edit.entities": "Entities (comma-separated)",
+    "edit.entitiesPlaceholder": "Central Bank, Person, City",
+    "edit.cancel": "Cancel",
+    "edit.save": "Save",
+    "edit.saveError": "Save failed",
+
+    "login.signIn": "Sign In",
+    "login.signUp": "Sign Up",
+    "login.email": "Email",
+    "login.username": "Username",
+    "login.emailOrLogin": "Email or username",
+    "login.password": "Password",
+    "login.minChars": "At least 8 characters",
+    "login.enterPassword": "Enter password",
+    "login.submit": "Sign In",
+    "login.createAccount": "Create Account",
+    "login.noAccount": "Don't have an account?",
+    "login.haveAccount": "Already have an account?",
+    "login.register": "Register",
+    "login.signInLink": "Sign In",
+    "login.footer": "Data protected with encryption. RBAC access control.",
+    "login.passwordMinError": "Password must be at least 8 characters",
+    "login.genericError": "An error occurred",
+
+    "common.loading": "Loading...",
+    "common.msgs": "msgs",
+    "common.accessDenied": "Access Denied",
+  },
+} as const;
+
+export type TranslationKey = keyof (typeof dictionaries)["ru"];
+
+interface I18nContextValue {
+  locale: Locale;
+  setLocale: (l: Locale) => void;
+  t: (key: TranslationKey) => string;
+}
+
+export const I18nContext = createContext<I18nContextValue>({
+  locale: "ru",
+  setLocale: () => {},
+  t: (key) => key,
+});
+
+export function useTranslation() {
+  return useContext(I18nContext);
+}
+
+export function getTranslator(locale: Locale) {
+  const dict = dictionaries[locale];
+  return (key: TranslationKey): string => dict[key] || key;
+}

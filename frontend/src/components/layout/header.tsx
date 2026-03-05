@@ -1,9 +1,12 @@
 "use client";
 
+import { useState, useRef, useEffect } from "react";
 import { useTheme } from "next-themes";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sun, Moon, Monitor, Clock, Activity, AlertTriangle } from "lucide-react";
+import { Sun, Moon, Monitor, Clock, Activity, AlertTriangle, LogOut, Shield, Languages } from "lucide-react";
 import { useGlobalTimeRange, useDemoContext } from "@/components/providers";
+import { useAuth } from "@/components/auth/auth-provider";
+import { useTranslation } from "@/lib/i18n";
 import type { RangePreset } from "@/lib/hooks";
 
 const PRESETS: { value: RangePreset; label: string }[] = [
@@ -18,6 +21,20 @@ export function Header({ title }: { title: string }) {
   const { theme, setTheme } = useTheme();
   const { preset, setRange } = useGlobalTimeRange();
   const { isDemo, setIsDemo, lastError } = useDemoContext();
+  const { user, isAdmin, logout } = useAuth();
+  const { locale, setLocale, t } = useTranslation();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
 
   const themeOptions = [
     { value: "light", icon: Sun },
@@ -36,7 +53,7 @@ export function Header({ title }: { title: string }) {
           {title}
         </motion.h1>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
             <Clock className="w-4 h-4 text-muted-foreground ml-2" />
             {PRESETS.map(p => (
@@ -63,7 +80,16 @@ export function Header({ title }: { title: string }) {
             }`}
           >
             <Activity className={`w-3.5 h-3.5 ${!isDemo ? "animate-pulse" : ""}`} />
-            {isDemo ? "Demo" : "Live"}
+            {isDemo ? t("header.demo") : t("header.live")}
+          </button>
+
+          <button
+            onClick={() => setLocale(locale === "ru" ? "en" : "ru")}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-muted rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+            title={locale === "ru" ? "Switch to English" : "Переключить на русский"}
+          >
+            <Languages className="w-3.5 h-3.5" />
+            {locale === "ru" ? "EN" : "RU"}
           </button>
 
           <div className="flex items-center bg-muted rounded-lg p-1">
@@ -84,6 +110,62 @@ export function Header({ title }: { title: string }) {
               );
             })}
           </div>
+
+          {user && (
+            <div className="relative" ref={menuRef}>
+              <button
+                onClick={() => setMenuOpen(!menuOpen)}
+                className="flex items-center gap-2 px-3 py-1.5 bg-muted rounded-lg hover:bg-accent transition-colors"
+              >
+                <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center">
+                  <span className="text-[10px] font-bold text-primary">
+                    {user.username.charAt(0).toUpperCase()}
+                  </span>
+                </div>
+                <span className="text-xs font-medium text-foreground hidden sm:inline">
+                  {user.username}
+                </span>
+                {isAdmin && <Shield className="w-3 h-3 text-primary" />}
+              </button>
+
+              <AnimatePresence>
+                {menuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -5, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -5, scale: 0.95 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute right-0 top-full mt-2 w-56 bg-card rounded-xl border border-border shadow-xl shadow-black/10 overflow-hidden z-50"
+                  >
+                    <div className="p-3 border-b border-border">
+                      <p className="text-sm font-medium text-foreground">{user.username}</p>
+                      <p className="text-xs text-muted-foreground">{user.email}</p>
+                      <div className="flex items-center gap-1.5 mt-1">
+                        {isAdmin ? (
+                          <span className="text-[10px] font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded">
+                            ADMIN
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-semibold text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                            USER
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="p-1">
+                      <button
+                        onClick={() => { setMenuOpen(false); logout(); }}
+                        className="flex items-center gap-2 w-full px-3 py-2 text-sm text-destructive hover:bg-destructive/10 rounded-lg transition-colors"
+                      >
+                        <LogOut className="w-4 h-4" />
+                        {t("header.logout")}
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
         </div>
       </div>
 
@@ -105,7 +187,7 @@ export function Header({ title }: { title: string }) {
                 onClick={() => setIsDemo(true)}
                 className="text-xs font-medium text-destructive hover:underline shrink-0"
               >
-                Switch to Demo
+                {t("header.switchToDemo")}
               </button>
             </div>
           </motion.div>

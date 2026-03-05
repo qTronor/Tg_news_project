@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslation } from "@/lib/i18n";
 import { Header } from "@/components/layout/header";
 import { PageTransition } from "@/components/layout/page-transition";
 import { Card } from "@/components/ui/card";
@@ -13,17 +14,18 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 
 export default function TopicsPage() {
+  const { t } = useTranslation();
   const [view, setView] = useState<"grid" | "list">("grid");
   const { data: topics, isLoading } = useTopics();
 
   return (
     <>
-      <Header title="Topics" />
+      <Header title={t("topics.title")} />
       <PageTransition>
         <div className="p-6 space-y-4">
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">
-              {isLoading ? "Loading..." : `${(topics || []).length} active topics`}
+              {isLoading ? t("common.loading") : `${(topics || []).length} ${t("topics.activeTopics")}`}
             </p>
             <div className="flex items-center bg-muted rounded-lg p-1">
               <button
@@ -47,8 +49,8 @@ export default function TopicsPage() {
             </div>
           ) : view === "grid" ? (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {(topics || []).map((t, i) => (
-                <Link key={t.cluster_id} href={`/topics/${t.cluster_id}`}>
+              {(topics || []).map((topic, i) => (
+                <Link key={topic.cluster_id} href={`/topics/${topic.cluster_id}`}>
                   <motion.div
                     initial={{ opacity: 0, scale: 0.95 }}
                     animate={{ opacity: 1, scale: 1 }}
@@ -58,25 +60,25 @@ export default function TopicsPage() {
                       <div className="flex items-start justify-between">
                         <div>
                           <div className="flex items-center gap-2">
-                            <h3 className="text-base font-semibold text-foreground">{t.label}</h3>
-                            {t.is_new && <Badge variant="new">NEW</Badge>}
+                            <h3 className="text-base font-semibold text-foreground">{topic.label}</h3>
+                            {topic.is_new && <Badge variant="new">NEW</Badge>}
                           </div>
                           <p className="text-xs text-muted-foreground mt-1">
-                            {t.message_count} messages &middot; {t.channel_count} channels
+                            {topic.message_count} {t("topics.messages")} &middot; {topic.channel_count} {t("topics.channels")}
                           </p>
                         </div>
                         <div
                           className="w-3 h-3 rounded-full shrink-0 mt-1"
-                          style={{ backgroundColor: t.avg_sentiment > 0.2 ? "var(--positive)" : t.avg_sentiment < -0.2 ? "var(--negative)" : "var(--neutral-sentiment)" }}
+                          style={{ backgroundColor: topic.avg_sentiment > 0.2 ? "var(--positive)" : topic.avg_sentiment < -0.2 ? "var(--negative)" : "var(--neutral-sentiment)" }}
                         />
                       </div>
 
                       <div className="mt-4">
-                        <Sparkline data={t.sparkline} width={200} height={32} />
+                        <Sparkline data={topic.sparkline} width={200} height={32} />
                       </div>
 
                       <div className="mt-3 flex items-center gap-1 flex-wrap">
-                        {t.top_entities.slice(0, 3).map(e => (
+                        {topic.top_entities.slice(0, 3).map(e => (
                           <Badge key={e.id} variant="entity" color={entityTypeColor(e.type)} className="text-[10px]">
                             {e.text}
                           </Badge>
@@ -84,7 +86,7 @@ export default function TopicsPage() {
                       </div>
 
                       <p className="mt-2 text-xs text-muted-foreground">
-                        Sentiment: {t.avg_sentiment.toFixed(2)}
+                        {t("topics.sentiment")}: {topic.avg_sentiment.toFixed(2)}
                       </p>
                     </Card>
                   </motion.div>
@@ -93,8 +95,8 @@ export default function TopicsPage() {
             </div>
           ) : (
             <div className="space-y-2">
-              {(topics || []).map((t, i) => (
-                <Link key={t.cluster_id} href={`/topics/${t.cluster_id}`}>
+              {(topics || []).map((topic, i) => (
+                <Link key={topic.cluster_id} href={`/topics/${topic.cluster_id}`}>
                   <motion.div
                     initial={{ opacity: 0, x: -20 }}
                     animate={{ opacity: 1, x: 0 }}
@@ -104,11 +106,11 @@ export default function TopicsPage() {
                   >
                     <div className="flex items-center gap-4">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-foreground">{t.label}</span>
-                        {t.is_new && <Badge variant="new">NEW</Badge>}
+                        <span className="text-sm font-semibold text-foreground">{topic.label}</span>
+                        {topic.is_new && <Badge variant="new">NEW</Badge>}
                       </div>
                       <div className="flex items-center gap-1">
-                        {t.top_entities.slice(0, 2).map(e => (
+                        {topic.top_entities.slice(0, 2).map(e => (
                           <Badge key={e.id} variant="entity" color={entityTypeColor(e.type)} className="text-[10px]">
                             {e.text}
                           </Badge>
@@ -116,11 +118,11 @@ export default function TopicsPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-4">
-                      <span className="text-xs text-muted-foreground">{t.message_count} msgs</span>
-                      <Sparkline data={t.sparkline} width={60} height={20} />
+                      <span className="text-xs text-muted-foreground">{topic.message_count} {t("common.msgs")}</span>
+                      <Sparkline data={topic.sparkline} width={60} height={20} />
                       <div
                         className="w-2 h-2 rounded-full"
-                        style={{ backgroundColor: t.avg_sentiment > 0.2 ? "var(--positive)" : t.avg_sentiment < -0.2 ? "var(--negative)" : "var(--neutral-sentiment)" }}
+                        style={{ backgroundColor: topic.avg_sentiment > 0.2 ? "var(--positive)" : topic.avg_sentiment < -0.2 ? "var(--negative)" : "var(--neutral-sentiment)" }}
                       />
                     </div>
                   </motion.div>

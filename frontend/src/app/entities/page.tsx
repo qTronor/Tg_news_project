@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslation } from "@/lib/i18n";
 import { Header } from "@/components/layout/header";
 import { PageTransition } from "@/components/layout/page-transition";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +14,7 @@ import Link from "next/link";
 const TYPES = ["All", "PER", "ORG", "LOC", "MISC"];
 
 export default function EntitiesPage() {
+  const { t } = useTranslation();
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("All");
 
@@ -26,7 +28,7 @@ export default function EntitiesPage() {
 
   return (
     <>
-      <Header title="Entities" />
+      <Header title={t("entities.title")} />
       <PageTransition>
         <div className="p-6 space-y-4">
           <div className="flex items-center gap-3">
@@ -34,7 +36,7 @@ export default function EntitiesPage() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <input
                 type="text"
-                placeholder="Search entities..."
+                placeholder={t("entities.search")}
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 className="w-full pl-9 pr-4 py-2 bg-card border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-primary/30 transition-all duration-200"
@@ -64,12 +66,12 @@ export default function EntitiesPage() {
           ) : (
             <div className="bg-card rounded-xl border border-border overflow-hidden">
               <div className="grid grid-cols-7 px-5 py-3 border-b border-border text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                <div className="col-span-2">Entity</div>
-                <div>Type</div>
-                <div className="text-right">Mentions</div>
-                <div className="text-right">Topics</div>
-                <div className="text-right">Channels</div>
-                <div className="text-right">Trend</div>
+                <div className="col-span-2">{t("entities.entity")}</div>
+                <div>{t("entities.type")}</div>
+                <div className="text-right">{t("entities.mentions")}</div>
+                <div className="text-right">{t("entities.topics")}</div>
+                <div className="text-right">{t("entities.channels")}</div>
+                <div className="text-right">{t("entities.trend")}</div>
               </div>
               {filtered.map((e, i) => {
                 const trendPct = e.trend_pct || 0;
@@ -99,7 +101,7 @@ export default function EntitiesPage() {
                 );
               })}
               {filtered.length === 0 && (
-                <p className="text-center text-muted-foreground py-8">No entities found.</p>
+                <p className="text-center text-muted-foreground py-8">{t("entities.noEntities")}</p>
               )}
             </div>
           )}

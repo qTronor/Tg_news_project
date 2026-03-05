@@ -4,6 +4,7 @@ import { useState, useMemo } from "react";
 import { Header } from "@/components/layout/header";
 import { PageTransition } from "@/components/layout/page-transition";
 import { MessageCard } from "@/components/feed/message-card";
+import { useTranslation } from "@/lib/i18n";
 import { useMessages, useTopics } from "@/lib/use-data";
 import { useDemoContext } from "@/components/providers";
 import { Search, Filter, Radio, Loader2, WifiOff } from "lucide-react";
@@ -12,6 +13,7 @@ import { motion, AnimatePresence } from "framer-motion";
 const sentiments = ["All", "Positive", "Neutral", "Negative"];
 
 export default function FeedPage() {
+  const { t } = useTranslation();
   const { isDemo } = useDemoContext();
   const [search, setSearch] = useState("");
   const [channelFilter, setChannelFilter] = useState("All");
@@ -36,7 +38,7 @@ export default function FeedPage() {
 
   return (
     <>
-      <Header title="Feed" />
+      <Header title={t("feed.title")} />
       <PageTransition>
         <div className="p-6 space-y-4">
           <div className="flex flex-wrap items-center gap-3 bg-card rounded-xl border border-border p-4">
@@ -44,7 +46,7 @@ export default function FeedPage() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <input
                 type="text"
-                placeholder="Search messages..."
+                placeholder={t("feed.search")}
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 className="w-full pl-9 pr-4 py-2 bg-muted rounded-lg text-sm text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-primary/30 transition-all duration-200"
@@ -56,7 +58,7 @@ export default function FeedPage() {
               onChange={e => setChannelFilter(e.target.value)}
               className="bg-muted rounded-lg px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary/30 transition-all duration-200"
             >
-              <option value="All">All Channels</option>
+              <option value="All">{t("feed.allChannels")}</option>
               {channels.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
 
@@ -65,8 +67,8 @@ export default function FeedPage() {
               onChange={e => setTopicFilter(e.target.value)}
               className="bg-muted rounded-lg px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary/30 transition-all duration-200"
             >
-              <option value="All">All Topics</option>
-              {(topics || []).map(t => <option key={t.cluster_id} value={t.label}>{t.label}</option>)}
+              <option value="All">{t("feed.allTopics")}</option>
+              {(topics || []).map(topic => <option key={topic.cluster_id} value={topic.label}>{topic.label}</option>)}
             </select>
 
             <select
@@ -86,15 +88,15 @@ export default function FeedPage() {
               }`}
             >
               <Radio className={`w-3.5 h-3.5 ${liveMode ? "animate-pulse" : ""}`} />
-              Live
+              {t("feed.live")}
             </button>
           </div>
 
           <div className="flex items-center justify-between text-sm text-muted-foreground">
             <span>
-              {isLoading ? "Loading..." : `Showing ${(messages || []).length} messages`}
+              {isLoading ? t("feed.loading") : `${t("feed.showing")} ${(messages || []).length} ${t("feed.messages")}`}
               {!isDemo && (
-                <span className="ml-2 text-positive text-xs font-medium">(Live API)</span>
+                <span className="ml-2 text-positive text-xs font-medium">{t("feed.liveApi")}</span>
               )}
             </span>
             <Filter className="w-4 h-4" />
@@ -108,8 +110,8 @@ export default function FeedPage() {
             >
               <WifiOff className="w-5 h-5 shrink-0" />
               <div>
-                <p className="font-medium">Cannot reach API</p>
-                <p className="text-xs opacity-75">Make sure analytics_duckdb is running on the configured URL, or switch to Demo mode.</p>
+                <p className="font-medium">{t("feed.cannotReachApi")}</p>
+                <p className="text-xs opacity-75">{t("feed.apiHint")}</p>
               </div>
             </motion.div>
           )}
@@ -126,7 +128,7 @@ export default function FeedPage() {
                 ))}
               </AnimatePresence>
               {(messages || []).length === 0 && !isError && (
-                <p className="text-center text-muted-foreground py-8">No messages match your filters.</p>
+                <p className="text-center text-muted-foreground py-8">{t("feed.noMessages")}</p>
               )}
             </div>
           )}

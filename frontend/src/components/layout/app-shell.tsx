@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, createContext, useContext } from "react";
+import { usePathname } from "next/navigation";
 import { Sidebar } from "./sidebar";
 import { motion } from "framer-motion";
 
@@ -12,8 +13,15 @@ interface SidebarCtx {
 const SidebarContext = createContext<SidebarCtx>({ collapsed: false, setCollapsed: () => {} });
 export function useSidebar() { return useContext(SidebarContext); }
 
+const NO_SHELL_PATHS = ["/login"];
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
+  const pathname = usePathname();
+
+  if (NO_SHELL_PATHS.includes(pathname)) {
+    return <>{children}</>;
+  }
 
   return (
     <SidebarContext.Provider value={{ collapsed, setCollapsed }}>

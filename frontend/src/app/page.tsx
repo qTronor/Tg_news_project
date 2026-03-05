@@ -10,6 +10,7 @@ import { SentimentAreaChart } from "@/components/charts/sentiment-area";
 import { ChannelBarChart } from "@/components/charts/channel-bar";
 import { useOverview, useTopics, useEntities, useSentiment } from "@/lib/use-data";
 import { formatNumber, entityTypeColor } from "@/lib/utils";
+import { useTranslation } from "@/lib/i18n";
 import { MessageSquare, Layers, Radio, TrendingUp, Loader2 } from "lucide-react";
 import { motion } from "framer-motion";
 import Link from "next/link";
@@ -23,6 +24,7 @@ function LoadingSpinner() {
 }
 
 export default function DashboardPage() {
+  const { t } = useTranslation();
   const { data: overview, isLoading: loadingOverview } = useOverview();
   const { data: topics, isLoading: loadingTopics } = useTopics();
   const { data: entities, isLoading: loadingEntities } = useEntities();
@@ -52,27 +54,27 @@ export default function DashboardPage() {
             ) : (
               <>
                 <KpiCard
-                  title="Messages Today"
+                  title={t("dash.messagesToday")}
                   value={overview.total_messages}
                   change={overview.messages_change_pct}
                   icon={<MessageSquare className="w-5 h-5" />}
                   delay={0}
                 />
                 <KpiCard
-                  title="New Topics (24h)"
+                  title={t("dash.newTopics")}
                   value={overview.new_topics}
                   change={overview.topics_change}
                   icon={<Layers className="w-5 h-5" />}
                   delay={0.1}
                 />
                 <KpiCard
-                  title="Active Channels"
+                  title={t("dash.activeChannels")}
                   value={overview.active_channels}
                   icon={<Radio className="w-5 h-5" />}
                   delay={0.2}
                 />
                 <KpiCard
-                  title="Avg Sentiment"
+                  title={t("dash.avgSentiment")}
                   value={overview.avg_sentiment.toFixed(2)}
                   icon={<TrendingUp className="w-5 h-5" />}
                   delay={0.3}
@@ -84,14 +86,14 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <Card className="lg:col-span-2">
               <CardHeader>
-                <CardTitle>Sentiment Dynamics</CardTitle>
+                <CardTitle>{t("dash.sentimentDynamics")}</CardTitle>
               </CardHeader>
               {loadingSentiment || !sentiment ? <LoadingSpinner /> : <SentimentAreaChart data={sentiment} />}
             </Card>
 
             <Card>
               <CardHeader>
-                <CardTitle>Top Entities</CardTitle>
+                <CardTitle>{t("dash.topEntities")}</CardTitle>
               </CardHeader>
               {loadingEntities ? <LoadingSpinner /> : (
                 <div className="space-y-3">
@@ -121,7 +123,7 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <Card>
               <CardHeader>
-                <CardTitle>Top Topics</CardTitle>
+                <CardTitle>{t("dash.topTopics")}</CardTitle>
               </CardHeader>
               {loadingTopics ? <LoadingSpinner /> : (
                 <div className="space-y-3">
@@ -161,7 +163,7 @@ export default function DashboardPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle>Channel Activity</CardTitle>
+                <CardTitle>{t("dash.channelActivity")}</CardTitle>
               </CardHeader>
               {loadingTopics ? <LoadingSpinner /> : <ChannelBarChart data={channelAgg} />}
             </Card>
