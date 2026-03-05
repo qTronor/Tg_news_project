@@ -4,6 +4,7 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTranslation } from "@/lib/i18n";
 import { Zap, Eye, EyeOff, Loader2, Mail, User, Lock, ArrowRight } from "lucide-react";
+import Link from "next/link";
 import { useAuth } from "@/components/auth/auth-provider";
 
 type Mode = "login" | "register";
@@ -170,6 +171,17 @@ export default function LoginPage() {
                   </button>
                 </div>
               </div>
+
+              {mode === "login" && (
+                <div className="text-right -mt-2">
+                  <Link
+                    href="/forgot-password"
+                    className="text-xs text-primary hover:underline"
+                  >
+                    {t("login.forgotPassword")}
+                  </Link>
+                </div>
+              )}
 
               <AnimatePresence>
                 {error && (

@@ -3,10 +3,11 @@
 import { useState, useRef, useEffect } from "react";
 import { useTheme } from "next-themes";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sun, Moon, Monitor, Clock, Activity, AlertTriangle, LogOut, Shield, Languages } from "lucide-react";
+import { Sun, Moon, Monitor, Clock, Activity, AlertTriangle, LogOut, Shield, Languages, Menu } from "lucide-react";
 import { useGlobalTimeRange, useDemoContext } from "@/components/providers";
 import { useAuth } from "@/components/auth/auth-provider";
 import { useTranslation } from "@/lib/i18n";
+import { useSidebar } from "./app-shell";
 import type { RangePreset } from "@/lib/hooks";
 
 const PRESETS: { value: RangePreset; label: string }[] = [
@@ -23,6 +24,7 @@ export function Header({ title }: { title: string }) {
   const { isDemo, setIsDemo, lastError } = useDemoContext();
   const { user, isAdmin, logout } = useAuth();
   const { locale, setLocale, t } = useTranslation();
+  const { setMobileOpen } = useSidebar();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -44,17 +46,25 @@ export function Header({ title }: { title: string }) {
 
   return (
     <header className="sticky top-0 z-30 bg-background/80 backdrop-blur-md border-b border-border">
-      <div className="h-16 flex items-center justify-between px-6">
-        <motion.h1
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="text-xl font-semibold text-foreground"
-        >
-          {title}
-        </motion.h1>
+      <div className="h-16 flex items-center justify-between px-4 md:px-6 gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <button
+            onClick={() => setMobileOpen(true)}
+            className="md:hidden p-1.5 -ml-1 text-muted-foreground hover:text-foreground rounded-lg hover:bg-accent transition-colors shrink-0"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+          <motion.h1
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="text-lg md:text-xl font-semibold text-foreground truncate"
+          >
+            {title}
+          </motion.h1>
+        </div>
 
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
+        <div className="flex items-center gap-2 md:gap-3 shrink-0">
+          <div className="hidden sm:flex items-center gap-1 bg-muted rounded-lg p-1">
             <Clock className="w-4 h-4 text-muted-foreground ml-2" />
             {PRESETS.map(p => (
               <button
@@ -73,7 +83,7 @@ export function Header({ title }: { title: string }) {
 
           <button
             onClick={() => setIsDemo(!isDemo)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
+            className={`hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
               isDemo
                 ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
                 : "bg-positive/10 text-positive border border-positive/20"
@@ -85,14 +95,14 @@ export function Header({ title }: { title: string }) {
 
           <button
             onClick={() => setLocale(locale === "ru" ? "en" : "ru")}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-muted rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+            className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 bg-muted rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
             title={locale === "ru" ? "Switch to English" : "Переключить на русский"}
           >
             <Languages className="w-3.5 h-3.5" />
             {locale === "ru" ? "EN" : "RU"}
           </button>
 
-          <div className="flex items-center bg-muted rounded-lg p-1">
+          <div className="hidden md:flex items-center bg-muted rounded-lg p-1">
             {themeOptions.map(opt => {
               const Icon = opt.icon;
               return (

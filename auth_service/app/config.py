@@ -17,6 +17,15 @@ class Settings(BaseSettings):
     admin_bootstrap_email: str | None = None
     admin_bootstrap_password: str | None = None
 
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_user: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str = "noreply@tgnews.local"
+    smtp_tls: bool = True
+
+    frontend_url: str = "http://localhost:3000"
+
     model_config = {"env_prefix": "AUTH_", "env_file": ".env"}
 
 

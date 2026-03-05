@@ -40,7 +40,7 @@ export function useAuth() {
   return useContext(AuthContext);
 }
 
-const PUBLIC_PATHS = ["/login"];
+const PUBLIC_PATHS = ["/login", "/forgot-password", "/reset-password"];
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);

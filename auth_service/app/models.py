@@ -31,6 +31,7 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     role = Column(String(20), nullable=False, server_default=text("'user'"))
     is_active = Column(Boolean, server_default=text("true"), nullable=False)
+    email_verified = Column(Boolean, server_default=text("false"), nullable=False)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 

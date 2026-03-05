@@ -162,6 +162,27 @@ const dictionaries = {
     "login.footer": "Данные защищены шифрованием. RBAC-контроль доступа.",
     "login.passwordMinError": "Пароль должен содержать минимум 8 символов",
     "login.genericError": "Произошла ошибка",
+    "login.forgotPassword": "Забыли пароль?",
+
+    // Forgot password
+    "forgot.title": "Восстановление пароля",
+    "forgot.description": "Введите email, и мы отправим ссылку для сброса пароля.",
+    "forgot.email": "Email",
+    "forgot.submit": "Отправить ссылку",
+    "forgot.sent": "Если аккаунт существует, ссылка для сброса отправлена на указанный email.",
+    "forgot.backToLogin": "Вернуться ко входу",
+    "forgot.error": "Произошла ошибка",
+
+    // Reset password
+    "reset.title": "Новый пароль",
+    "reset.description": "Введите новый пароль для вашего аккаунта.",
+    "reset.password": "Новый пароль",
+    "reset.confirm": "Подтвердите пароль",
+    "reset.submit": "Сбросить пароль",
+    "reset.success": "Пароль успешно сброшен! Теперь вы можете войти.",
+    "reset.invalidToken": "Ссылка недействительна или устарела.",
+    "reset.mismatch": "Пароли не совпадают",
+    "reset.goToLogin": "Перейти ко входу",
 
     // Common
     "common.loading": "Загрузка...",
@@ -314,6 +335,25 @@ const dictionaries = {
     "login.footer": "Data protected with encryption. RBAC access control.",
     "login.passwordMinError": "Password must be at least 8 characters",
     "login.genericError": "An error occurred",
+    "login.forgotPassword": "Forgot password?",
+
+    "forgot.title": "Reset Password",
+    "forgot.description": "Enter your email and we'll send a reset link.",
+    "forgot.email": "Email",
+    "forgot.submit": "Send Reset Link",
+    "forgot.sent": "If the account exists, a reset link has been sent to the provided email.",
+    "forgot.backToLogin": "Back to Sign In",
+    "forgot.error": "An error occurred",
+
+    "reset.title": "New Password",
+    "reset.description": "Enter a new password for your account.",
+    "reset.password": "New Password",
+    "reset.confirm": "Confirm Password",
+    "reset.submit": "Reset Password",
+    "reset.success": "Password reset successful! You can now sign in.",
+    "reset.invalidToken": "This link is invalid or has expired.",
+    "reset.mismatch": "Passwords do not match",
+    "reset.goToLogin": "Go to Sign In",
 
     "common.loading": "Loading...",
     "common.msgs": "msgs",

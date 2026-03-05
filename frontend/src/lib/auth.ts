@@ -197,4 +197,43 @@ export const authApi = {
       body: JSON.stringify(eventIds),
     });
   },
+
+  async forgotPassword(email: string): Promise<{ detail: string }> {
+    const res = await fetch(`${AUTH_BASE}/api/auth/forgot-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `Error ${res.status}`);
+    }
+    return res.json();
+  },
+
+  async resetPassword(token: string, newPassword: string): Promise<{ detail: string }> {
+    const res = await fetch(`${AUTH_BASE}/api/auth/reset-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, new_password: newPassword }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `Error ${res.status}`);
+    }
+    return res.json();
+  },
+
+  verifyEmail(token: string): Promise<{ detail: string }> {
+    return authFetch("/api/auth/verify-email", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+  },
+
+  resendVerification(): Promise<{ detail: string }> {
+    return authFetch("/api/auth/resend-verification", {
+      method: "POST",
+    });
+  },
 };

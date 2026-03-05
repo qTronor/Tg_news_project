@@ -12,3 +12,4 @@ python-multipart==0.0.20
 slowapi==0.1.9
 cryptography==44.0.2
 email-validator==2.2.0
+aiosmtplib==3.0.2

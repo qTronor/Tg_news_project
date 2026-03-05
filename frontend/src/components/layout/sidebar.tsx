@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   LayoutDashboard, Newspaper, Layers, Users, Share2, Settings,
-  ChevronLeft, ChevronRight, Zap, Radio, ScrollText, Shield,
+  ChevronLeft, ChevronRight, Zap, Radio, ScrollText, Shield, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSidebar } from "./app-shell";
@@ -28,7 +28,7 @@ const ADMIN_ITEMS: { href: string; labelKey: TranslationKey; icon: typeof Layout
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { collapsed, setCollapsed } = useSidebar();
+  const { collapsed, setCollapsed, mobileOpen, setMobileOpen } = useSidebar();
   const { isAdmin } = useAuth();
   const { t } = useTranslation();
 
@@ -40,7 +40,9 @@ export function Sidebar() {
       animate={{ width: collapsed ? 64 : 240 }}
       transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
       className={cn(
-        "fixed left-0 top-0 z-40 h-screen flex flex-col border-r border-border bg-sidebar overflow-hidden"
+        "fixed left-0 top-0 z-40 h-screen flex flex-col border-r border-border bg-sidebar overflow-hidden",
+        "max-md:w-60 max-md:transition-transform max-md:duration-300",
+        mobileOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full"
       )}
     >
       <div className="flex items-center gap-3 px-4 h-16 border-b border-border shrink-0">
@@ -60,6 +62,12 @@ export function Sidebar() {
             </motion.span>
           )}
         </AnimatePresence>
+        <button
+          onClick={() => setMobileOpen(false)}
+          className="ml-auto md:hidden p-1 text-muted-foreground hover:text-foreground"
+        >
+          <X className="w-5 h-5" />
+        </button>
       </div>
 
       <nav className="flex-1 py-4 px-2 space-y-1 overflow-y-auto">

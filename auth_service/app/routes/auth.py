@@ -8,21 +8,29 @@ from ..database import get_db
 from ..dependencies import get_client_ip, get_current_user
 from ..models import RefreshSession, User
 from ..schemas import (
+    ForgotPasswordRequest,
     PasswordChange,
     RefreshRequest,
+    ResetPasswordRequest,
     TokenPair,
     UserLogin,
     UserProfile,
     UserRegister,
     UserUpdate,
+    VerifyEmailRequest,
 )
 from ..security import (
     create_access_token,
+    create_email_verification_token,
+    create_password_reset_token,
     create_refresh_token,
+    decode_email_verification_token,
+    decode_password_reset_token,
     hash_password,
     hash_refresh_token,
     verify_password,
 )
+from ..email import send_password_reset_email, send_verification_email
 from ..config import get_settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -49,6 +57,9 @@ async def register(
     )
     db.add(user)
     await db.flush()
+
+    token = create_email_verification_token(str(user.id))
+    await send_verification_email(user.email, user.username, token)
 
     return await _issue_tokens(user, request, db)
 
@@ -154,6 +165,71 @@ async def change_password(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
 
     user.password_hash = hash_password(body.new_password)
+
+
+@router.post("/forgot-password", status_code=status.HTTP_200_OK)
+async def forgot_password(
+    body: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalar_one_or_none()
+
+    if user and user.is_active:
+        token = create_password_reset_token(str(user.id))
+        await send_password_reset_email(user.email, user.username, token)
+
+    return {"detail": "If account exists, a reset link has been sent"}
+
+
+@router.post("/reset-password", status_code=status.HTTP_200_OK)
+async def reset_password(
+    body: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    user_id = decode_password_reset_token(body.token)
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset token")
+
+    from uuid import UUID as _UUID
+    result = await db.execute(select(User).where(User.id == _UUID(user_id)))
+    user = result.scalar_one_or_none()
+    if not user or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User not found")
+
+    user.password_hash = hash_password(body.new_password)
+    return {"detail": "Password has been reset successfully"}
+
+
+@router.post("/verify-email", status_code=status.HTTP_200_OK)
+async def verify_email(
+    body: VerifyEmailRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    user_id = decode_email_verification_token(body.token)
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired verification token")
+
+    from uuid import UUID as _UUID
+    result = await db.execute(select(User).where(User.id == _UUID(user_id)))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User not found")
+
+    user.email_verified = True
+    return {"detail": "Email verified successfully"}
+
+
+@router.post("/resend-verification", status_code=status.HTTP_200_OK)
+async def resend_verification(
+    user: User = Depends(get_current_user),
+):
+    if user.email_verified:
+        return {"detail": "Email already verified"}
+
+    token = create_email_verification_token(str(user.id))
+    await send_verification_email(user.email, user.username, token)
+    return {"detail": "Verification email sent"}
 
 
 async def _issue_tokens(user: User, request: Request, db: AsyncSession) -> TokenPair:
