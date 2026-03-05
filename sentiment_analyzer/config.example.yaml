@@ -1,0 +1,56 @@
+service_name: "sentiment-analyzer"
+consumer_id: "sentiment-analyzer"
+source_system: "sentiment-analyzer"
+event_version: "v1.0.0"
+
+kafka:
+  bootstrap_servers: "kafka:9093"
+  input_topic: "preprocessed.messages"
+  output_topic: "sentiment.enriched"
+  dlq_topic: "dlq.sentiment"
+  consumer_group: "sentiment-analyzer-group"
+  client_id: "sentiment-analyzer"
+  max_poll_records: 50
+  auto_offset_reset: "earliest"
+
+postgres:
+  host: "postgres"
+  port: 5432
+  database: "telegram_news"
+  user: "postgres"
+  password: "postgres"
+  min_size: 1
+  max_size: 5
+  command_timeout: 30
+
+schemas:
+  preprocessed_message_path: "/app/schemas/preprocessed_message.schema.json"
+  sentiment_enriched_path: "/app/schemas/sentiment_enriched.schema.json"
+
+model:
+  name: "blanchefort/rubert-base-cased-sentiment"
+  # local_path: "/app/models/sentiment_clf"  # uncomment to use fine-tuned model
+  # label2id_path: "/app/models/sentiment_clf/label2id.json"
+  device: "cpu"
+  batch_size: 32
+  max_length: 384
+  chunk_overlap: 64
+  neutral_threshold: 0.55
+  version: "1.0.0"
+
+retry:
+  max_attempts: 5
+  initial_backoff_seconds: 1.0
+  max_backoff_seconds: 30.0
+  backoff_multiplier: 2.0
+
+health:
+  host: "0.0.0.0"
+  port: 8000
+
+metrics:
+  host: "0.0.0.0"
+  port: 8001
+
+logging:
+  level: "INFO"

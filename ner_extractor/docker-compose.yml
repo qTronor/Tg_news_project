@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  ner-extractor:
+    build:
+      context: .
+      dockerfile: ner_extractor/Dockerfile
+    container_name: ner-extractor
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      NER_EXTRACTOR__KAFKA__BOOTSTRAP_SERVERS: "kafka:9093"
+      NER_EXTRACTOR__POSTGRES__HOST: "postgres"
+      NER_EXTRACTOR__POSTGRES__PORT: "5432"
+      NER_EXTRACTOR__POSTGRES__DATABASE: "${DB_NAME:-telegram_news}"
+      NER_EXTRACTOR__POSTGRES__USER: "${DB_USER:-postgres}"
+      NER_EXTRACTOR__POSTGRES__PASSWORD: "${DB_PASSWORD}"
+    volumes:
+      - ./ner_extractor/config.yaml:/app/ner_extractor/config.yaml:ro
+    ports:
+      - "8020:8000"
+      - "8021:8001"
+    command: ["python", "/app/ner_extractor/main.py", "--config", "/app/ner_extractor/config.yaml"]
+    restart: unless-stopped
+    networks:
+      - telegram-news-network

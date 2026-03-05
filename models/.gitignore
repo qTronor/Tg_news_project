@@ -1,0 +1,8 @@
+*.bin
+*.safetensors
+*.h5
+*.ot
+*.pt
+*.onnx
+!README.md
+!.gitignore

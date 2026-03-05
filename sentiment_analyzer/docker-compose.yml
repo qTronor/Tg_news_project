@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  sentiment-analyzer:
+    build:
+      context: .
+      dockerfile: sentiment_analyzer/Dockerfile
+    container_name: sentiment-analyzer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      SENTIMENT_ANALYZER__KAFKA__BOOTSTRAP_SERVERS: "kafka:9093"
+      SENTIMENT_ANALYZER__POSTGRES__HOST: "postgres"
+      SENTIMENT_ANALYZER__POSTGRES__PORT: "5432"
+      SENTIMENT_ANALYZER__POSTGRES__DATABASE: "${DB_NAME:-telegram_news}"
+      SENTIMENT_ANALYZER__POSTGRES__USER: "${DB_USER:-postgres}"
+      SENTIMENT_ANALYZER__POSTGRES__PASSWORD: "${DB_PASSWORD}"
+      SENTIMENT_ANALYZER__MODEL__DEVICE: "${MODEL_DEVICE:-cpu}"
+    volumes:
+      - ./sentiment_analyzer/config.yaml:/app/sentiment_analyzer/config.yaml:ro
+      - ./models:/app/models:ro
+      - sentiment-model-cache:/root/.cache/huggingface
+    ports:
+      - "8010:8000"
+      - "8011:8001"
+    command: ["python", "/app/sentiment_analyzer/main.py", "--config", "/app/sentiment_analyzer/config.yaml"]
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+volumes:
+  sentiment-model-cache:
