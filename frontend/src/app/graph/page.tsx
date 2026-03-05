@@ -1,0 +1,110 @@
+"use client";
+
+import { useState, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
+import { Header } from "@/components/layout/header";
+import { PageTransition } from "@/components/layout/page-transition";
+import { useGraph } from "@/lib/use-data";
+import { Search, Loader2 } from "lucide-react";
+import dynamic from "next/dynamic";
+
+const GraphView = dynamic(
+  () => import("@/components/graph/graph-view").then(m => ({ default: m.GraphView })),
+  { ssr: false, loading: () => <div className="w-full h-full flex items-center justify-center text-muted-foreground">Loading graph...</div> }
+);
+
+function GraphContent() {
+  const searchParams = useSearchParams();
+  const focusParam = searchParams.get("focus") || undefined;
+  const [search, setSearch] = useState("");
+  const [depth, setDepth] = useState(2);
+  const [showTopics, setShowTopics] = useState(true);
+  const [showChannels, setShowChannels] = useState(true);
+  const [showEntities, setShowEntities] = useState(true);
+
+  const { data: graphData, isLoading } = useGraph(focusParam, depth);
+
+  const filteredData = graphData ? {
+    nodes: graphData.nodes.filter(n => {
+      if (!showTopics && n.type === "topic") return false;
+      if (!showChannels && n.type === "channel") return false;
+      if (!showEntities && n.type.startsWith("entity_")) return false;
+      if (search && !n.label.toLowerCase().includes(search.toLowerCase())) return false;
+      return true;
+    }),
+    edges: graphData.edges,
+  } : { nodes: [], edges: [] };
+
+  return (
+    <div className="p-6 h-[calc(100vh-4rem)] flex flex-col gap-4">
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-[200px] max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <input
+            type="text"
+            placeholder="Search node..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 bg-card border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-primary/30 transition-all"
+          />
+        </div>
+
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">Depth:</span>
+          {[1, 2, 3].map(d => (
+            <button
+              key={d}
+              onClick={() => setDepth(d)}
+              className={`w-8 h-8 rounded-lg text-xs font-medium transition-all ${
+                depth === d ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {d}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-3 text-sm">
+          {[
+            { key: "topics", label: "Topics", value: showTopics, set: setShowTopics },
+            { key: "channels", label: "Channels", value: showChannels, set: setShowChannels },
+            { key: "entities", label: "Entities", value: showEntities, set: setShowEntities },
+          ].map(f => (
+            <label key={f.key} className="flex items-center gap-1.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={f.value}
+                onChange={e => f.set(e.target.checked)}
+                className="rounded border-border text-primary focus:ring-primary/30"
+              />
+              <span className="text-muted-foreground">{f.label}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 bg-card rounded-xl border border-border overflow-hidden">
+        {isLoading ? (
+          <div className="w-full h-full flex items-center justify-center">
+            <Loader2 className="w-6 h-6 text-primary animate-spin" />
+          </div>
+        ) : (
+          <GraphView data={filteredData} focusNodeId={focusParam} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function GraphPage() {
+  return (
+    <>
+      <Header title="Entity Graph" />
+      <PageTransition>
+        <Suspense fallback={<div className="p-6 text-muted-foreground">Loading...</div>}>
+          <GraphContent />
+        </Suspense>
+      </PageTransition>
+    </>
+  );
+}
