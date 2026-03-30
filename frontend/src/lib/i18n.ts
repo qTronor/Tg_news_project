@@ -44,7 +44,7 @@ const dictionaries = {
     "feed.liveApi": "(Live API)",
     "feed.noMessages": "Нет сообщений по выбранным фильтрам.",
     "feed.cannotReachApi": "Нет связи с API",
-    "feed.apiHint": "Убедитесь, что analytics_duckdb запущен, или переключитесь в Демо-режим.",
+    "feed.apiHint": "Убедитесь, что API аналитики запущен, или переключитесь в Демо-режим.",
     "feed.loading": "Загрузка...",
 
     // Sentiment
@@ -225,7 +225,7 @@ const dictionaries = {
     "feed.liveApi": "(Live API)",
     "feed.noMessages": "No messages match your filters.",
     "feed.cannotReachApi": "Cannot reach API",
-    "feed.apiHint": "Make sure analytics_duckdb is running, or switch to Demo mode.",
+    "feed.apiHint": "Make sure the analytics API is running, or switch to Demo mode.",
     "feed.loading": "Loading...",
 
     "sentiment.positive": "Positive",

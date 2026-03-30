@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Optional
 from uuid import UUID
 
+import sqlite3
 import asyncpg
-import duckdb
 import hdbscan
 import numpy as np
 import umap
@@ -70,47 +70,45 @@ SET status = $2::varchar,
 WHERE event_id = $1;
 """
 
-DUCKDB_INIT_SQL = """
+SQLITE_INIT_SQL = """
 CREATE TABLE IF NOT EXISTS message_embeddings (
-    event_id VARCHAR PRIMARY KEY,
-    channel VARCHAR NOT NULL,
-    message_id BIGINT NOT NULL,
-    text VARCHAR,
-    embedding DOUBLE[],
-    event_timestamp TIMESTAMP NOT NULL,
-    ingested_at TIMESTAMP DEFAULT current_timestamp,
-    clustered BOOLEAN DEFAULT false
+    event_id TEXT PRIMARY KEY,
+    channel TEXT NOT NULL,
+    message_id INTEGER NOT NULL,
+    text TEXT,
+    embedding TEXT,
+    event_timestamp TEXT NOT NULL,
+    ingested_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    clustered INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS cluster_results (
-    id INTEGER PRIMARY KEY DEFAULT (nextval('cluster_results_seq')),
-    event_id VARCHAR NOT NULL,
-    channel VARCHAR NOT NULL,
-    message_id BIGINT NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    message_id INTEGER NOT NULL,
     cluster_id INTEGER NOT NULL,
-    cluster_probability DOUBLE NOT NULL,
-    bucket_id VARCHAR,
-    run_id VARCHAR NOT NULL,
-    run_timestamp TIMESTAMP NOT NULL,
-    algo_version VARCHAR NOT NULL,
-    window_start TIMESTAMP,
-    window_end TIMESTAMP
+    cluster_probability REAL NOT NULL,
+    bucket_id TEXT,
+    run_id TEXT NOT NULL,
+    run_timestamp TEXT NOT NULL,
+    algo_version TEXT NOT NULL,
+    window_start TEXT,
+    window_end TEXT
 );
 
-CREATE SEQUENCE IF NOT EXISTS cluster_results_seq START 1;
-
 CREATE TABLE IF NOT EXISTS cluster_runs (
-    run_id VARCHAR PRIMARY KEY,
-    run_timestamp TIMESTAMP NOT NULL,
-    algo_version VARCHAR NOT NULL,
-    window_start TIMESTAMP,
-    window_end TIMESTAMP,
+    run_id TEXT PRIMARY KEY,
+    run_timestamp TEXT NOT NULL,
+    algo_version TEXT NOT NULL,
+    window_start TEXT,
+    window_end TEXT,
     total_messages INTEGER,
     total_clustered INTEGER,
     total_noise INTEGER,
     n_clusters INTEGER,
-    config_json VARCHAR,
-    duration_seconds DOUBLE
+    config_json TEXT,
+    duration_seconds REAL
 );
 """
 
@@ -152,7 +150,7 @@ class HealthState:
     ready: bool = False
     kafka_connected: bool = False
     postgres_connected: bool = False
-    duckdb_connected: bool = False
+    db_connected: bool = False
     last_processed_at: Optional[str] = None
     last_clustering_at: Optional[str] = None
     last_error: Optional[str] = None
@@ -164,7 +162,7 @@ class TopicClustererService:
         self._consumer: Optional[AIOKafkaConsumer] = None
         self._producer: Optional[AIOKafkaProducer] = None
         self._pool: Optional[asyncpg.Pool] = None
-        self._duckdb: Optional[duckdb.DuckDBPyConnection] = None
+        self._db: Optional[sqlite3.Connection] = None
         self._health = HealthState()
         self._input_validator = JsonSchemaValidator(
             config.schemas.preprocessed_message_path
@@ -187,7 +185,7 @@ class TopicClustererService:
 
     async def start(self) -> None:
         await self._start_db()
-        self._start_duckdb()
+        self._start_embeddings_db()
         await self._start_kafka()
         await self._start_http()
         self._health.ready = True
@@ -208,8 +206,8 @@ class TopicClustererService:
             await self._producer.stop()
         if self._pool is not None:
             await self._pool.close()
-        if self._duckdb is not None:
-            self._duckdb.close()
+        if self._db is not None:
+            self._db.close()
         if self._web_runner is not None:
             await self._web_runner.cleanup()
         logger.info("service stopped")
@@ -239,16 +237,16 @@ class TopicClustererService:
         )
         self._health.postgres_connected = True
 
-    def _start_duckdb(self) -> None:
-        db_path = Path(self._config.storage.duckdb_path)
+    def _start_embeddings_db(self) -> None:
+        db_path = Path(self._config.storage.db_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._duckdb = duckdb.connect(str(db_path))
-        for statement in DUCKDB_INIT_SQL.strip().split(";"):
+        self._db = sqlite3.connect(str(db_path))
+        for statement in SQLITE_INIT_SQL.strip().split(";"):
             statement = statement.strip()
             if statement:
-                self._duckdb.execute(statement)
-        self._health.duckdb_connected = True
-        logger.info("duckdb initialized path=%s", db_path)
+                self._db.execute(statement)
+        self._health.db_connected = True
+        logger.info("embeddings db initialized path=%s", db_path)
 
     async def _start_kafka(self) -> None:
         self._consumer = AIOKafkaConsumer(
@@ -302,7 +300,7 @@ class TopicClustererService:
             "ready": self._health.ready,
             "kafka_connected": self._health.kafka_connected,
             "postgres_connected": self._health.postgres_connected,
-            "duckdb_connected": self._health.duckdb_connected,
+            "db_connected": self._health.db_connected,
             "last_processed_at": self._health.last_processed_at,
             "last_clustering_at": self._health.last_clustering_at,
             "last_error": self._health.last_error,
@@ -474,10 +472,10 @@ class TopicClustererService:
             offset=record.offset,
         )
 
-    # ── online ingest: compute embedding + store in DuckDB ──────────
+    # ── online ingest: compute embedding + store in embeddings DB ───
 
     async def _ingest_once(self, context: MessageContext) -> ProcessingOutcome:
-        if self._pool is None or self._duckdb is None:
+        if self._pool is None or self._db is None:
             raise RuntimeError("service not initialized")
 
         async with self._pool.acquire() as conn:
@@ -499,7 +497,7 @@ class TopicClustererService:
 
         embedding = self._compute_embedding(text)
 
-        self._duckdb.execute(
+        self._db.execute(
             """
             INSERT OR REPLACE INTO message_embeddings
                 (event_id, channel, message_id, text, embedding, event_timestamp)
@@ -510,13 +508,14 @@ class TopicClustererService:
                 context.channel,
                 context.message_id,
                 text[:2000],
-                embedding.tolist(),
-                context.event_timestamp_dt,
+                json.dumps(embedding.tolist()),
+                context.event_timestamp_dt.isoformat(),
             ],
         )
+        self._db.commit()
 
-        unclustered = self._duckdb.execute(
-            "SELECT count(*) FROM message_embeddings WHERE NOT clustered"
+        unclustered = self._db.execute(
+            "SELECT count(*) FROM message_embeddings WHERE clustered = 0"
         ).fetchone()[0]
         BUFFER_SIZE.set(unclustered)
 
@@ -567,12 +566,12 @@ class TopicClustererService:
                 CLUSTERING_RUNS.labels(status="error").inc()
 
     def _run_clustering(self) -> None:
-        if self._duckdb is None:
+        if self._db is None:
             return
 
-        rows = self._duckdb.execute(
+        rows = self._db.execute(
             "SELECT event_id, channel, message_id, text, embedding, event_timestamp "
-            "FROM message_embeddings WHERE NOT clustered "
+            "FROM message_embeddings WHERE clustered = 0 "
             "ORDER BY event_timestamp"
         ).fetchall()
 
@@ -590,8 +589,10 @@ class TopicClustererService:
         event_ids = [r[0] for r in rows]
         channels = [r[1] for r in rows]
         message_ids = [r[2] for r in rows]
-        timestamps = [r[5] for r in rows]
-        embeddings = np.array([r[4] for r in rows], dtype=np.float32)
+        timestamps = [r[5] for r in rows]  # event_timestamp (ISO string)
+        embeddings = np.array(
+            [json.loads(r[4] or "[]") for r in rows], dtype=np.float32
+        )
 
         window_hours = self._config.clustering.window_hours
         bucket_ids = self._make_time_buckets(timestamps, window_hours)
@@ -607,14 +608,19 @@ class TopicClustererService:
         n_clustered = int((labels >= 0).sum())
         n_noise = int((labels == -1).sum())
 
-        self._duckdb.execute(
+        def _ts(val):
+            if val is None:
+                return None
+            return val.isoformat() if hasattr(val, "isoformat") else str(val)
+
+        self._db.execute(
             "INSERT INTO cluster_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 run_id,
-                now_dt,
+                now_dt.isoformat(),
                 algo_version,
-                min(timestamps) if timestamps else None,
-                max(timestamps) if timestamps else None,
+                _ts(min(timestamps)) if timestamps else None,
+                _ts(max(timestamps)) if timestamps else None,
                 len(rows),
                 n_clustered,
                 n_noise,
@@ -631,7 +637,7 @@ class TopicClustererService:
         )
 
         for i, eid in enumerate(event_ids):
-            self._duckdb.execute(
+            self._db.execute(
                 "INSERT INTO cluster_results "
                 "(event_id, channel, message_id, cluster_id, cluster_probability, "
                 "bucket_id, run_id, run_timestamp, algo_version, window_start, window_end) "
@@ -644,18 +650,19 @@ class TopicClustererService:
                     float(probs[i]),
                     bucket_ids[i],
                     run_id,
-                    now_dt,
+                    now_dt.isoformat(),
                     algo_version,
-                    min(timestamps) if timestamps else None,
-                    max(timestamps) if timestamps else None,
+                    _ts(min(timestamps)) if timestamps else None,
+                    _ts(max(timestamps)) if timestamps else None,
                 ],
             )
 
-        self._duckdb.execute(
-            "UPDATE message_embeddings SET clustered = true WHERE event_id IN "
-            f"(SELECT unnest(?))",
-            [event_ids],
+        placeholders = ",".join("?" * len(event_ids))
+        self._db.execute(
+            f"UPDATE message_embeddings SET clustered = 1 WHERE event_id IN ({placeholders})",
+            event_ids,
         )
+        self._db.commit()
 
         self._export_parquet(run_id)
 
@@ -747,17 +754,25 @@ class TopicClustererService:
         return labels, probs
 
     def _export_parquet(self, run_id: str) -> None:
-        if self._duckdb is None:
+        if self._db is None:
             return
         parquet_dir = Path(self._config.storage.parquet_dir)
         parquet_dir.mkdir(parents=True, exist_ok=True)
         out_path = parquet_dir / f"cluster_results_{run_id}.parquet"
         try:
-            self._duckdb.execute(
-                f"COPY (SELECT * FROM cluster_results WHERE run_id = ?) "
-                f"TO '{out_path}' (FORMAT PARQUET)",
-                [run_id],
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+            cur = self._db.execute(
+                "SELECT * FROM cluster_results WHERE run_id = ?", [run_id]
             )
+            rows = cur.fetchall()
+            if not rows:
+                return
+            col_names = [d[0] for d in cur.description]
+            table = pa.table(
+                {name: [r[i] for r in rows] for i, name in enumerate(col_names)}
+            )
+            pq.write_table(table, out_path)
             logger.info("exported parquet path=%s", out_path)
         except Exception:  # noqa: BLE001 - non-critical export
             logger.exception("parquet export failed run_id=%s", run_id)

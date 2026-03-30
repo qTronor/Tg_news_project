@@ -1,18 +1,30 @@
-# Список каналов для сбора (можно расширять)
+# Telegram channels to collect
 channels:
   - name: "rbc_news"
     url: "https://t.me/rbc_news"
     enabled: true
-    # Если указать since, соберём посты начиная с этой даты (UTC).
-    # Формат: YYYY-MM-DD
-    since: "2026-01-01"
     limit: 2500
+
+  - name: "banksta"
+    url: "https://t.me/banksta"
+    enabled: true
+    limit: 2500
+
+collection:
+  lookback_days: 3
+
+kafka:
+  enabled: true
+  topic: "raw.telegram.messages"
 
 output:
   data_dir: "data"
   state_dir: "state"
-  # Форматы: jsonl, csv
   formats: ["jsonl"]
+
+scheduler:
+  enabled: true
+  interval_seconds: 3600
 
 logging:
   level: "INFO"

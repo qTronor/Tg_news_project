@@ -4,15 +4,15 @@ import asyncio
 import logging
 from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import Dict
 
 import yaml
 
 from collector.config import AppConfig
-from collector.state import StateStore
 from collector.sources.telegram import TelegramChannelSource
-from collector.sinks.jsonl import JsonlSink
 from collector.sinks.csv_sink import CsvSink
+from collector.sinks.jsonl import JsonlSink
+from collector.sinks.kafka_raw import KafkaRawSink
 
 
 def load_config(path: Path) -> AppConfig:
@@ -27,78 +27,83 @@ def _setup_logging(level: str) -> None:
     )
 
 
+def _resolve_window_start(lookback_days: int) -> date:
+    return (datetime.now(timezone.utc).date() - timedelta(days=lookback_days - 1))
+
+
 async def collect_once(cfg: AppConfig) -> Dict[str, int]:
     _setup_logging(cfg.logging.level)
     log = logging.getLogger("collector")
 
     data_dir = Path(cfg.output.data_dir)
-    state_dir = Path(cfg.output.state_dir)
-    state = StateStore(state_dir / "state.json")
-    last_ids = state.load()
-
     results: Dict[str, int] = {}
+    effective_since = _resolve_window_start(cfg.collection.lookback_days)
 
     async with TelegramChannelSource(session_name="collector") as src:
-        for ch_cfg in cfg.channels:
-            if not ch_cfg.enabled:
-                continue
+        kafka_sink = KafkaRawSink(cfg.kafka) if cfg.kafka.enabled else None
+        if kafka_sink is not None:
+            await kafka_sink.start()
 
-            channel = ch_cfg.name
-            if "jsonl" in cfg.output.formats:
-                jsonl_path = data_dir / f"{channel}.jsonl"
-                if jsonl_path.exists():
-                    jsonl_path.unlink()
-            if "csv" in cfg.output.formats:
-                csv_path = data_dir / f"{channel}.csv"
-                if csv_path.exists():
-                    csv_path.unlink()
-            # Используем URL если он указан, иначе используем name как username
-            channel_identifier = str(ch_cfg.url) if ch_cfg.url else ch_cfg.name
-            min_id = last_ids.get(channel)
-            if min_id is None:
-                effective_since: Optional[date] = ch_cfg.since
-            else:
-                effective_since = (datetime.now(timezone.utc) - timedelta(days=3)).date()
+        try:
+            for ch_cfg in cfg.channels:
+                if not ch_cfg.enabled:
+                    continue
 
-            log.info(
-                "Collecting channel=%s since=%s min_id=%s limit=%s",
-                channel,
-                effective_since,
-                min_id,
-                ch_cfg.limit,
-            )
+                channel = ch_cfg.name
+                if "jsonl" in cfg.output.formats:
+                    jsonl_path = data_dir / f"{channel}.jsonl"
+                    if jsonl_path.exists():
+                        jsonl_path.unlink()
+                if "csv" in cfg.output.formats:
+                    csv_path = data_dir / f"{channel}.csv"
+                    if csv_path.exists():
+                        csv_path.unlink()
 
-            items = []
-            max_id_seen: Optional[int] = None
+                channel_identifier = str(ch_cfg.url) if ch_cfg.url else ch_cfg.name
 
-            async for item in src.iter_messages(
-                channel=channel_identifier,
-                since=effective_since,
-                min_id_exclusive=min_id,
-                limit=ch_cfg.limit,
-            ):
-                items.append(item)
-                max_id_seen = item.message_id if (max_id_seen is None or item.message_id > max_id_seen) else max_id_seen
+                log.info(
+                    "Collecting channel=%s since=%s limit=%s",
+                    channel,
+                    effective_since,
+                    ch_cfg.limit,
+                )
 
-            if not items:
-                log.info("No new posts for channel=%s", channel)
-                results[channel] = 0
-                continue
+                items = []
+                async for item in src.iter_messages(
+                    channel=channel_identifier,
+                    since=effective_since,
+                    min_id_exclusive=None,
+                    limit=ch_cfg.limit,
+                ):
+                    items.append(item)
 
-            written = 0
-            if "jsonl" in cfg.output.formats:
-                sink = JsonlSink(data_dir / f"{channel}.jsonl")
-                written += sink.write(items)
+                if not items:
+                    log.info("No posts found in lookback window for channel=%s", channel)
+                    results[channel] = 0
+                    continue
 
-            if "csv" in cfg.output.formats:
-                sink = CsvSink(data_dir / f"{channel}.csv")
-                written += sink.write(items)
+                written = 0
+                if "jsonl" in cfg.output.formats:
+                    written += JsonlSink(data_dir / f"{channel}.jsonl").write(items)
 
-            if max_id_seen is not None:
-                state.set_last_id(channel, max_id_seen)
+                if "csv" in cfg.output.formats:
+                    written += CsvSink(data_dir / f"{channel}.csv").write(items)
 
-            log.info("Done channel=%s written=%s last_id=%s", channel, written, max_id_seen)
-            results[channel] = written
+                published = 0
+                if kafka_sink is not None:
+                    published = await kafka_sink.publish(items)
+
+                log.info(
+                    "Done channel=%s collected=%s stored=%s published_to_kafka=%s",
+                    channel,
+                    len(items),
+                    written,
+                    published,
+                )
+                results[channel] = len(items)
+        finally:
+            if kafka_sink is not None:
+                await kafka_sink.stop()
 
     return results
 

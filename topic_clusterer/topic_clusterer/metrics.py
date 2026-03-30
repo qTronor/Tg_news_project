@@ -30,7 +30,7 @@ CLUSTERING_DURATION = Histogram(
 )
 BUFFER_SIZE = Gauge(
     "topic_clusterer_buffer_size",
-    "Number of messages pending clustering in DuckDB",
+    "Number of messages pending clustering in embeddings DB",
 )
 CLUSTERS_FOUND = Gauge(
     "topic_clusterer_clusters_found",

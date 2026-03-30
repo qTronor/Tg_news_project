@@ -332,42 +332,6 @@ with driver.session() as session:
 | `scripts/init_neo4j.sh` | Инициализировать Neo4j схему |
 | `scripts/validate_schemas.sh` | Валидировать JSON схемы |
 
-## 🦆 DuckDB Analytics Layer
-
-Для UI-аналитики добавлен read-only слой DuckDB поверх Parquet lake.
-Основная OLTP БД остаётся в Postgres.
-
-### Lake layout
-
-```bash
-lake/
-├── clean/dt=YYYY-MM-DD/channel=.../*.parquet
-├── predictions/topic/dt=.../*.parquet
-├── predictions/sentiment/dt=.../*.parquet
-├── entities/dt=.../*.parquet
-├── clusters/dt=.../window_hours=.../*.parquet
-├── ui/final/dt=.../*.parquet
-└── _meta/watermarks.json
-```
-
-### Ingest Colab outputs в lake
-
-```bash
-python analytics_duckdb/ingest.py --colab-outputs-path ./colab_outputs --lake-path ./lake
-```
-
-Поддерживаются артефакты:
-`telegram_clean.parquet`, `topic_predictions.parquet`, `sentiment_predictions.parquet`,
-`doc_entities.parquet`, `clusters.parquet`, `final_table.parquet`.
-
-### Запуск аналитического API
-
-```bash
-docker compose -f docker-compose.infrastructure.yml -f analytics_duckdb/docker-compose.yml up --build analytics-duckdb
-```
-
-Подробно: `analytics_duckdb/README.md`.
-
 ## 🐛 Error Handling
 
 ### Dead Letter Queues (DLQ)

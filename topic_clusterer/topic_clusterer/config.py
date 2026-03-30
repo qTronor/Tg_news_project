@@ -82,7 +82,7 @@ class ClusteringConfig(BaseModel):
 
 
 class StorageConfig(BaseModel):
-    duckdb_path: str = "data/topic_clusters.duckdb"
+    db_path: str = "data/topic_clusters.db"
     parquet_dir: str = "data/parquet"
 
 

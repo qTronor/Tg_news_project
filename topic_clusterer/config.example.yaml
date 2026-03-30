@@ -42,7 +42,7 @@ clustering:
   scheduler_interval_seconds: 3600
 
 storage:
-  duckdb_path: "data/topic_clusters.duckdb"
+  db_path: "data/topic_clusters.db"
   parquet_dir: "data/parquet"
 
 retry:

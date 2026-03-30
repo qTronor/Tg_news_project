@@ -8,10 +8,16 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 from collector.runner import run_collect
+from collector.service import CollectorService
 
 
 def cmd_collect(args: argparse.Namespace) -> int:
     return run_collect(args.config)
+
+
+def cmd_service(args: argparse.Namespace) -> int:
+    asyncio.run(CollectorService(args.config).run())
+    return 0
 
 
 async def _make_string_session(api_id: int, api_hash: str) -> str:
@@ -38,6 +44,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_collect = sub.add_parser("collect", help="Collect posts from channels in config.yaml")
     p_collect.add_argument("--config", default="config.yaml")
     p_collect.set_defaults(func=cmd_collect)
+
+    p_service = sub.add_parser("service", help="Run scheduled collection as a long-lived service")
+    p_service.add_argument("--config", default="config.yaml")
+    p_service.set_defaults(func=cmd_service)
 
     p_sess = sub.add_parser("make-session", help="Generate TG_STRING_SESSION interactively")
     p_sess.set_defaults(func=cmd_make_session)

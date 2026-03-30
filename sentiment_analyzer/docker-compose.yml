@@ -24,8 +24,8 @@ services:
       - ./models:/app/models:ro
       - sentiment-model-cache:/root/.cache/huggingface
     ports:
-      - "8010:8000"
-      - "8011:8001"
+      - "8012:8000"
+      - "8013:8001"
     command: ["python", "/app/sentiment_analyzer/main.py", "--config", "/app/sentiment_analyzer/config.yaml"]
     restart: unless-stopped
     networks:
