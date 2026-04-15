@@ -9,6 +9,7 @@ services:
       - "${AUTH_PORT:-8030}:8030"
     environment:
       AUTH_DATABASE_URL: postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@host.docker.internal:5432/tg_news_auth
+      AUTH_ANALYTICS_DATABASE_URL: postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@host.docker.internal:5432/telegram_news
       AUTH_JWT_SECRET_KEY: ${AUTH_JWT_SECRET:-dev-only-secret-change-in-prod}
       AUTH_CORS_ORIGINS: '["http://localhost:3000"]'
       AUTH_ADMIN_BOOTSTRAP_EMAIL: ${ADMIN_EMAIL:-admin@tgnews.local}

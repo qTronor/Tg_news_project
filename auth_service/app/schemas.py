@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
@@ -105,3 +105,47 @@ class AuditLogEntry(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ApiErrorResponse(BaseModel):
+    error: str
+    detail: str
+    meta: dict | None = None
+
+
+class TelegramChannelCreateRequest(BaseModel):
+    channel: str = Field(min_length=1, max_length=512)
+    start_date: date
+
+
+class TelegramChannelStatus(BaseModel):
+    channel_name: str
+    input_value: str | None = None
+    telegram_url: str | None = None
+    telegram_channel_id: int | None = None
+    requested_start_date: date | None = None
+    historical_limit_date: date
+    status: str
+    validation_status: str
+    validation_error: str | None = None
+    live_enabled: bool
+    backfill_total_days: int
+    backfill_completed_days: int
+    backfill_failed_days: int
+    backfill_pending_days: int
+    backfill_running_days: int
+    backfill_retrying_days: int
+    backfill_messages_published: int
+    backfill_last_completed_date: date | None = None
+    last_live_collected_at: datetime | None = None
+    added_at: datetime
+    added_by_user_id: UUID | None = None
+    first_message_at: datetime | None = None
+    first_message_event_id: str | None = None
+    first_message_available: bool
+    raw_message_count: int = 0
+    feed_path: str | None = None
+
+
+class TelegramChannelProgress(TelegramChannelStatus):
+    pass

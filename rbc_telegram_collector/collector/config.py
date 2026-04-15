@@ -41,9 +41,34 @@ class KafkaConfig(BaseModel):
     client_id: str = "telegram-collector"
 
 
+class AnalyticsDbConfig(BaseModel):
+    enabled: bool = False
+    host: str = Field(default_factory=lambda: os.getenv("COLLECTOR_ANALYTICS_DB_HOST") or "localhost")
+    port: int = Field(default_factory=lambda: int(os.getenv("COLLECTOR_ANALYTICS_DB_PORT") or "5432"))
+    database: str = Field(default_factory=lambda: os.getenv("COLLECTOR_ANALYTICS_DB_NAME") or "telegram_news")
+    user: str = Field(default_factory=lambda: os.getenv("COLLECTOR_ANALYTICS_DB_USER") or "postgres")
+    password: str = Field(default_factory=lambda: os.getenv("COLLECTOR_ANALYTICS_DB_PASSWORD") or "postgres")
+    schema: Optional[str] = Field(default_factory=lambda: os.getenv("COLLECTOR_ANALYTICS_DB_SCHEMA"))
+    min_size: int = 1
+    max_size: int = 5
+    command_timeout: int = 30
+
+    def dsn(self) -> str:
+        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
+
+
 class SchedulerConfig(BaseModel):
     enabled: bool = False
     interval_seconds: int = Field(default=3600, ge=1)
+
+
+class BackfillConfig(BaseModel):
+    enabled: bool = True
+    global_concurrency: int = Field(default=1, ge=1)
+    max_jobs_per_cycle: int = Field(default=1, ge=1)
+    max_attempts: int = Field(default=3, ge=1)
+    retry_backoff_seconds: int = Field(default=60, ge=1)
+    flood_sleep_cap_seconds: int = Field(default=300, ge=1)
 
 
 class AppConfig(BaseModel):
@@ -52,4 +77,6 @@ class AppConfig(BaseModel):
     logging: LoggingConfig = LoggingConfig()
     collection: CollectionConfig = CollectionConfig()
     kafka: KafkaConfig = KafkaConfig()
+    analytics_db: AnalyticsDbConfig = AnalyticsDbConfig()
     scheduler: SchedulerConfig = SchedulerConfig()
+    backfill: BackfillConfig = BackfillConfig()

@@ -8,10 +8,11 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from starlette.responses import JSONResponse
 
+from .analytics_db import analytics_engine
 from .config import get_settings
 from .database import Base, engine
 from .models import User
-from .routes import admin, auth, reactions
+from .routes import admin, auth, reactions, sources
 from .security import hash_password
 
 logger = logging.getLogger("auth_service")
@@ -43,6 +44,7 @@ async def lifespan(app: FastAPI):
                 logger.info("Bootstrap admin user created: %s", settings.admin_bootstrap_email)
 
     yield
+    await analytics_engine.dispose()
     await engine.dispose()
 
 
@@ -91,6 +93,7 @@ async def security_headers(request: Request, call_next):
 app.include_router(auth.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 app.include_router(reactions.router, prefix="/api")
+app.include_router(sources.router, prefix="/api")
 
 
 @app.get("/health")

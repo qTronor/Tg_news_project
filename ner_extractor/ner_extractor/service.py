@@ -118,6 +118,16 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING id;
 """
 
+DELETE_NER_RESULTS_SQL = """
+DELETE FROM ner_results
+WHERE preprocessed_message_id = $1;
+"""
+
+DELETE_ENTITY_RELATIONS_SQL = """
+DELETE FROM entity_relations
+WHERE preprocessed_message_id = $1;
+"""
+
 
 class ProcessingOutcome(Enum):
     SUCCESS = "success"
@@ -497,6 +507,8 @@ class NerExtractorService:
                     )
 
                 entities = self._extract_entities(context.original_text)
+                await conn.execute(DELETE_ENTITY_RELATIONS_SQL, preprocessed_id)
+                await conn.execute(DELETE_NER_RESULTS_SQL, preprocessed_id)
                 processing_time_ms = (
                     time.monotonic() - processing_started
                 ) * 1000.0
@@ -515,8 +527,8 @@ class NerExtractorService:
                         self._config.model.confidence,
                         ent.normalized,
                         None,
-                        None,
-                        None,
+                        [],
+                        json.dumps({"source": "natasha"}),
                         "natasha",
                         self._config.model.version,
                         now_dt,

@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   LayoutDashboard, Newspaper, Layers, Users, Share2, Settings,
-  ChevronLeft, ChevronRight, Zap, Radio, ScrollText, Shield, X,
+  ChevronLeft, ChevronRight, Zap, Radio, ScrollText, Shield, X, CirclePlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSidebar } from "./app-shell";
@@ -18,6 +18,7 @@ const NAV_ITEMS: { href: string; labelKey: TranslationKey; icon: typeof LayoutDa
   { href: "/topics", labelKey: "nav.topics", icon: Layers },
   { href: "/entities", labelKey: "nav.entities", icon: Users },
   { href: "/graph", labelKey: "nav.graph", icon: Share2 },
+  { href: "/sources", labelKey: "nav.sources", icon: CirclePlus },
   { href: "/settings", labelKey: "nav.settings", icon: Settings },
 ];
 

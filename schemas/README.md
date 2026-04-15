@@ -17,6 +17,7 @@ All schemas follow JSON Schema Draft 07 specification and define the structure a
 | `preprocessed_message.schema.json` | `preprocessed` | Cleaned and tokenized text |
 | `sentiment_enriched.schema.json` | `sentiment_enriched` | Sentiment analysis results |
 | `ner_enriched.schema.json` | `ner_enriched` | Named entities and relations |
+| `topic_assignment.schema.json` | `topic_assignment` | Topic clustering assignments |
 | `graph_update.schema.json` | `graph_update` | Neo4j update commands |
 
 ## Common Structure
@@ -168,6 +169,7 @@ examples/
 ├── preprocessed_message.example.json
 ├── sentiment_enriched.example.json
 ├── ner_enriched.example.json
+├── topic_assignment.example.json
 └── graph_update.example.json
 ```
 

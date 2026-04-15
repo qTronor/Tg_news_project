@@ -141,7 +141,7 @@ auth_service
    - `run_id`,
    - `model_version`,
    - `event_timestamp`.
-6. Сохранение результатов в `cluster_results`, запусков в `cluster_runs`, экспорт в Parquet.
+6. Сохранение результатов в `cluster_assignments`, запусков в `cluster_runs_pg`, публикация `topic.assignments`, экспорт в Parquet.
 
 Параметры кластеризации управляются конфигурацией сервиса и версионируются вместе с `run_id`.
 
@@ -188,7 +188,8 @@ auth_service
 - `sentiment_results`;
 - `ner_results`;
 - `entity_relations`;
-- `cluster_results`;
+- `cluster_runs_pg`;
+- `cluster_assignments`;
 - `processed_events`;
 - `outbox`;
 - `topic_label_tasks`, `topic_labels`, `model_versions`, `model_eval_reports`.

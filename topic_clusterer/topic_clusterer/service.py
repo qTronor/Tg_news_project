@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -15,6 +16,7 @@ import sqlite3
 import asyncpg
 import hdbscan
 import numpy as np
+import torch
 import umap
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.structs import OffsetAndMetadata, TopicPartition
@@ -108,7 +110,8 @@ SELECT
     rm.event_id,
     rm.id AS raw_message_id,
     pm.id AS preprocessed_message_id,
-    rm.message_date
+    rm.message_date,
+    COALESCE(pm.trace_id, rm.trace_id) AS trace_id
 FROM raw_messages rm
 LEFT JOIN preprocessed_messages pm ON pm.event_id = rm.event_id
 WHERE rm.event_id = ANY($1::varchar[]);
@@ -150,6 +153,7 @@ CREATE TABLE IF NOT EXISTS message_embeddings (
     message_id INTEGER NOT NULL,
     text TEXT,
     embedding TEXT,
+    trace_id TEXT,
     event_timestamp TEXT NOT NULL,
     ingested_at TEXT DEFAULT CURRENT_TIMESTAMP,
     clustered INTEGER DEFAULT 0
@@ -184,6 +188,10 @@ CREATE TABLE IF NOT EXISTS cluster_runs (
     duration_seconds REAL
 );
 """
+
+SQLITE_SCHEMA_PATCHES = [
+    "ALTER TABLE message_embeddings ADD COLUMN trace_id TEXT",
+]
 
 
 class ProcessingOutcome(Enum):
@@ -256,21 +264,59 @@ class TopicClustererService:
         self._input_validator = JsonSchemaValidator(
             config.schemas.preprocessed_message_path
         )
+        self._output_validator = JsonSchemaValidator(
+            config.schemas.topic_assignment_path
+        )
         self._stop_event = asyncio.Event()
         self._web_runner: Optional[web.AppRunner] = None
         self._health_site: Optional[web.TCPSite] = None
         self._metrics_site: Optional[web.TCPSite] = None
         self._clustering_task: Optional[asyncio.Task] = None
-
+        self._clustering_lock = asyncio.Lock()
+        self._model_lock = asyncio.Lock()
+        self._sbert = None
+        self._device = self._resolve_device(config.model.device)
         logger.info(
-            "loading sbert model name=%s device=%s",
+            "topic model configured name=%s device=%s",
             config.model.sbert_model,
-            config.model.device,
+            self._device,
         )
-        self._sbert = SentenceTransformer(
-            config.model.sbert_model, device=config.model.device
-        )
-        logger.info("sbert model loaded")
+
+    @staticmethod
+    def _resolve_device(requested_device: str) -> str:
+        normalized = (requested_device or "auto").strip().lower()
+        if normalized == "auto":
+            return "cuda" if torch.cuda.is_available() else "cpu"
+        if normalized.startswith("cuda") and not torch.cuda.is_available():
+            logger.warning(
+                "cuda requested for topic model but unavailable, falling back to cpu"
+            )
+            return "cpu"
+        return normalized
+
+    async def _ensure_model_loaded(self) -> None:
+        if self._sbert is not None:
+            return
+        async with self._model_lock:
+            if self._sbert is not None:
+                return
+            model_kwargs: dict[str, Any] = {
+                "device": self._device,
+            }
+            if self._config.model.cache_dir:
+                model_kwargs["cache_folder"] = self._config.model.cache_dir
+            logger.info(
+                "loading sbert model name=%s device=%s",
+                self._config.model.sbert_model,
+                self._device,
+            )
+            self._sbert = SentenceTransformer(
+                self._config.model.sbert_model,
+                **model_kwargs,
+            )
+            if self._device == "cuda" and self._config.model.use_float16:
+                self._sbert.half()
+            logger.info("sbert model loaded")
 
     async def start(self) -> None:
         await self._start_db()
@@ -334,6 +380,12 @@ class TopicClustererService:
             statement = statement.strip()
             if statement:
                 self._db.execute(statement)
+        for statement in SQLITE_SCHEMA_PATCHES:
+            try:
+                self._db.execute(statement)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
         self._health.db_connected = True
         logger.info("embeddings db initialized path=%s", db_path)
 
@@ -515,7 +567,11 @@ class TopicClustererService:
         trace_id = payload["trace_id"]
         message_id = payload["payload"]["message_id"]
         channel = payload["payload"]["channel"]
-        original_text = payload["payload"].get("original_text", "")
+        original_text = (
+            payload["payload"].get("normalized_text")
+            or payload["payload"].get("cleaned_text")
+            or payload["payload"].get("original_text", "")
+        )
 
         try:
             event_timestamp_dt = parse_iso_datetime(event_timestamp)
@@ -590,13 +646,24 @@ class TopicClustererService:
                 )
             return ProcessingOutcome.SUCCESS
 
-        embedding = self._compute_embedding(text)
+        embedding = await self._compute_embedding(text)
 
         self._db.execute(
             """
-            INSERT OR REPLACE INTO message_embeddings
-                (event_id, channel, message_id, text, embedding, event_timestamp)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO message_embeddings
+                (event_id, channel, message_id, text, embedding, trace_id, event_timestamp, clustered)
+            VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(
+                (SELECT clustered FROM message_embeddings WHERE event_id = ?),
+                0
+            ))
+            ON CONFLICT(event_id) DO UPDATE SET
+                channel = excluded.channel,
+                message_id = excluded.message_id,
+                text = excluded.text,
+                embedding = excluded.embedding,
+                trace_id = excluded.trace_id,
+                event_timestamp = excluded.event_timestamp,
+                clustered = message_embeddings.clustered
             """,
             [
                 context.event_id,
@@ -604,7 +671,9 @@ class TopicClustererService:
                 context.message_id,
                 text[:2000],
                 json.dumps(embedding.tolist()),
+                context.trace_id,
                 (message_date_dt or context.event_timestamp_dt).isoformat(),
+                context.event_id,
             ],
         )
         self._db.commit()
@@ -618,6 +687,15 @@ class TopicClustererService:
             await conn.execute(
                 UPDATE_PROCESSED_COMPLETED_SQL, context.processing_event_id
             )
+
+        if unclustered >= self._config.clustering.trigger_min_messages:
+            try:
+                await self._run_clustering_cycle()
+            except Exception:  # noqa: BLE001 - clustering retries via scheduler
+                logger.exception(
+                    "immediate clustering trigger failed event_id=%s",
+                    context.event_id,
+                )
 
         MESSAGES_PROCESSED.labels(status="success").inc()
         return ProcessingOutcome.SUCCESS
@@ -634,10 +712,12 @@ class TopicClustererService:
         )
         return row is not None
 
-    def _compute_embedding(self, text: str) -> np.ndarray:
+    async def _compute_embedding(self, text: str) -> np.ndarray:
+        await self._ensure_model_loaded()
         return self._sbert.encode(
             text,
             normalize_embeddings=self._config.model.normalize_embeddings,
+            batch_size=self._config.model.batch_size,
             show_progress_bar=False,
         )
 
@@ -651,34 +731,39 @@ class TopicClustererService:
                 await asyncio.sleep(interval)
                 if self._stop_event.is_set():
                     break
-                loop = asyncio.get_running_loop()
-                batch = await loop.run_in_executor(None, self._build_clustering_run)
-                if batch is None:
-                    continue
-                await self._persist_clustering_run_pg(batch)
-                await loop.run_in_executor(None, self._record_clustering_run_sqlite, batch)
+                await self._run_clustering_cycle()
             except asyncio.CancelledError:
                 break
             except Exception:  # noqa: BLE001 - scheduler must not crash
                 logger.exception("clustering run failed")
                 CLUSTERING_RUNS.labels(status="error").inc()
 
+    async def _run_clustering_cycle(self) -> None:
+        if self._clustering_lock.locked():
+            return
+        async with self._clustering_lock:
+            loop = asyncio.get_running_loop()
+            while not self._stop_event.is_set():
+                batch = await loop.run_in_executor(None, self._build_clustering_run)
+                if batch is None:
+                    break
+                await self._persist_clustering_run_pg(batch)
+                await self._publish_assignment_events(batch)
+                await loop.run_in_executor(
+                    None, self._record_clustering_run_sqlite, batch
+                )
+
     def _build_clustering_run(self) -> Optional[ClusteringRunBatch]:
         if self._db is None:
             return None
 
         rows = self._db.execute(
-            "SELECT event_id, channel, message_id, text, embedding, event_timestamp "
+            "SELECT event_id, channel, message_id, text, embedding, trace_id, event_timestamp "
             "FROM message_embeddings WHERE clustered = 0 "
             "ORDER BY event_timestamp"
         ).fetchall()
 
-        if len(rows) < self._config.clustering.min_cluster_size:
-            logger.info(
-                "not enough unclustered messages count=%s min=%s",
-                len(rows),
-                self._config.clustering.min_cluster_size,
-            )
+        if not rows:
             return None
 
         logger.info("starting clustering run messages=%s", len(rows))
@@ -687,7 +772,8 @@ class TopicClustererService:
         event_ids = [r[0] for r in rows]
         channels = [r[1] for r in rows]
         message_ids = [r[2] for r in rows]
-        raw_timestamps = [r[5] for r in rows]
+        trace_ids = [r[5] for r in rows]
+        raw_timestamps = [r[6] for r in rows]
         timestamps = [
             parse_iso_datetime(ts) if isinstance(ts, str) else ts
             for ts in raw_timestamps
@@ -698,11 +784,11 @@ class TopicClustererService:
 
         window_hours = self._config.clustering.window_hours
         bucket_ids = self._make_time_buckets(timestamps, window_hours)
-        labels, probs = self._cluster_by_bucket(embeddings, bucket_ids)
+        labels, probs, strategy = self._cluster_by_bucket(embeddings, bucket_ids)
 
         now_dt = datetime.now(timezone.utc)
-        run_id = f"run_{now_dt.strftime('%Y%m%d_%H%M%S')}"
-        algo_version = f"umap+hdbscan_v{self._config.model.version}"
+        algo_version = f"{strategy}_v{self._config.model.version}"
+        run_id = self._make_run_id(event_ids, algo_version)
         duration = time.monotonic() - start_time
 
         n_clusters = len(set(labels)) - (1 if -1 in set(labels) else 0)
@@ -713,9 +799,11 @@ class TopicClustererService:
         config_json = {
             "min_cluster_size": self._config.clustering.min_cluster_size,
             "min_samples": self._config.clustering.min_samples,
+            "trigger_min_messages": self._config.clustering.trigger_min_messages,
             "n_neighbors": self._config.clustering.n_neighbors,
             "min_dist": self._config.clustering.min_dist,
             "window_hours": window_hours,
+            "strategy": strategy,
         }
 
         assignments: list[dict[str, Any]] = []
@@ -729,6 +817,7 @@ class TopicClustererService:
                     "cluster_probability": float(probs[i]),
                     "bucket_id": bucket_ids[i],
                     "message_date": timestamps[i],
+                    "trace_id": trace_ids[i],
                 }
             )
 
@@ -746,6 +835,13 @@ class TopicClustererService:
             duration_seconds=duration,
             assignments=assignments,
         )
+
+    @staticmethod
+    def _make_run_id(event_ids: list[str], algo_version: str) -> str:
+        digest = hashlib.sha1(
+            f"{algo_version}|{'|'.join(sorted(event_ids))}".encode("utf-8")
+        ).hexdigest()[:12]
+        return f"run_{digest}"
 
     async def _persist_clustering_run_pg(self, batch: ClusteringRunBatch) -> None:
         if self._pool is None:
@@ -771,6 +867,12 @@ class TopicClustererService:
 
                 refs_rows = await conn.fetch(SELECT_CLUSTER_ASSIGNMENT_REFS_SQL, event_ids)
                 refs = {row["event_id"]: row for row in refs_rows}
+
+                for assignment in batch.assignments:
+                    ref = refs.get(assignment["event_id"])
+                    if ref is not None and assignment.get("trace_id") in (None, ""):
+                        trace_id = ref["trace_id"]
+                        assignment["trace_id"] = str(trace_id) if trace_id is not None else None
 
                 await conn.executemany(
                     INSERT_CLUSTER_ASSIGNMENT_PG_SQL,
@@ -800,12 +902,77 @@ class TopicClustererService:
                     ],
                 )
 
+    async def _publish_assignment_events(self, batch: ClusteringRunBatch) -> None:
+        if self._producer is None:
+            raise RuntimeError("kafka producer not initialized")
+
+        for assignment in batch.assignments:
+            event = self._build_topic_assignment_event(batch, assignment)
+            self._output_validator.validate(event)
+            await self._producer.send_and_wait(
+                self._config.kafka.output_topic,
+                json.dumps(event).encode("utf-8"),
+                key=assignment["event_id"].encode("utf-8"),
+            )
+
+    def _build_topic_assignment_event(
+        self,
+        batch: ClusteringRunBatch,
+        assignment: dict[str, Any],
+    ) -> dict[str, Any]:
+        public_cluster_id = f"{batch.run_id}:{assignment['cluster_id']}"
+        assigned_at = batch.run_timestamp.isoformat().replace("+00:00", "Z")
+        window_start = (
+            batch.window_start.isoformat().replace("+00:00", "Z")
+            if batch.window_start is not None
+            else None
+        )
+        window_end = (
+            batch.window_end.isoformat().replace("+00:00", "Z")
+            if batch.window_end is not None
+            else None
+        )
+        return {
+            "event_id": assignment["event_id"],
+            "event_type": "topic_assignment",
+            "event_timestamp": assigned_at,
+            "event_version": self._config.event_version,
+            "source_system": self._config.source_system,
+            "trace_id": str(assignment["trace_id"]),
+            "payload": {
+                "message_id": assignment["message_id"],
+                "channel": assignment["channel"],
+                "topic_id": public_cluster_id,
+                "public_cluster_id": public_cluster_id,
+                "cluster_id": assignment["cluster_id"],
+                "run_id": batch.run_id,
+                "bucket_id": assignment["bucket_id"],
+                "cluster_probability": round(
+                    float(assignment["cluster_probability"]), 6
+                ),
+                "model": {
+                    "name": self._config.model.sbert_model,
+                    "version": self._config.model.version,
+                    "framework": "sentence-transformers",
+                },
+                "clustering": {
+                    "algorithm": batch.algo_version,
+                    "window_start": window_start,
+                    "window_end": window_end,
+                },
+                "assigned_at": assigned_at,
+            },
+        }
+
     def _record_clustering_run_sqlite(self, batch: ClusteringRunBatch) -> None:
         if self._db is None:
             return
 
         def _ts(val: Optional[datetime]) -> Optional[str]:
             return val.isoformat() if val is not None else None
+
+        self._db.execute("DELETE FROM cluster_results WHERE run_id = ?", [batch.run_id])
+        self._db.execute("DELETE FROM cluster_runs WHERE run_id = ?", [batch.run_id])
 
         self._db.execute(
             "INSERT INTO cluster_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -889,9 +1056,10 @@ class TopicClustererService:
 
     def _cluster_by_bucket(
         self, embeddings: np.ndarray, bucket_ids: list[str]
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, str]:
         labels = np.full(len(embeddings), -1, dtype=int)
         probs = np.zeros(len(embeddings), dtype=float)
+        strategy = "umap_hdbscan"
 
         unique_buckets: dict[str, list[int]] = {}
         for i, bid in enumerate(bucket_ids):
@@ -903,10 +1071,24 @@ class TopicClustererService:
         for bucket_id, idx_list in unique_buckets.items():
             idx = np.array(idx_list)
             if len(idx) < cfg.min_cluster_size:
+                fallback_labels, fallback_probs = self._fallback_cluster_bucket(
+                    embeddings[idx]
+                )
+                labels[idx] = fallback_labels + cluster_offset
+                probs[idx] = fallback_probs
+                cluster_offset += len(set(fallback_labels))
+                strategy = "similarity_fallback"
                 continue
 
             n_neighbors = min(cfg.n_neighbors, len(idx) - 1)
             if n_neighbors < 2:
+                fallback_labels, fallback_probs = self._fallback_cluster_bucket(
+                    embeddings[idx]
+                )
+                labels[idx] = fallback_labels + cluster_offset
+                probs[idx] = fallback_probs
+                cluster_offset += len(set(fallback_labels))
+                strategy = "similarity_fallback"
                 continue
 
             umap_model = umap.UMAP(
@@ -932,18 +1114,98 @@ class TopicClustererService:
             n_clusters = len(set(bucket_labels)) - (
                 1 if -1 in set(bucket_labels) else 0
             )
-            if n_clusters > 0:
-                mapped = np.where(
-                    bucket_labels == -1, -1, bucket_labels + cluster_offset
+            if n_clusters <= 0:
+                fallback_labels, fallback_probs = self._fallback_cluster_bucket(
+                    embeddings[idx]
                 )
-                cluster_offset += n_clusters
-            else:
-                mapped = bucket_labels
+                labels[idx] = fallback_labels + cluster_offset
+                probs[idx] = fallback_probs
+                cluster_offset += len(set(fallback_labels))
+                strategy = "similarity_fallback"
+                continue
 
+            mapped = np.where(
+                bucket_labels == -1, -1, bucket_labels + cluster_offset
+            )
+            cluster_offset += n_clusters
             labels[idx] = mapped
             probs[idx] = bucket_probs
 
+            noise_positions = np.where(bucket_labels == -1)[0]
+            if noise_positions.size > 0:
+                fallback_labels, fallback_probs = self._fallback_cluster_bucket(
+                    embeddings[idx][noise_positions]
+                )
+                labels[idx[noise_positions]] = fallback_labels + cluster_offset
+                probs[idx[noise_positions]] = fallback_probs
+                cluster_offset += len(set(fallback_labels))
+                strategy = "mixed"
+
+        return labels, probs, strategy
+
+    def _fallback_cluster_bucket(
+        self,
+        bucket_embeddings: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if len(bucket_embeddings) == 0:
+            return np.array([], dtype=int), np.array([], dtype=float)
+        if len(bucket_embeddings) == 1:
+            return np.array([0], dtype=int), np.array([1.0], dtype=float)
+
+        normalized = self._normalize_embeddings(bucket_embeddings)
+        threshold = self._config.clustering.fallback_similarity_threshold
+        parent = list(range(len(normalized)))
+
+        def find(index: int) -> int:
+            while parent[index] != index:
+                parent[index] = parent[parent[index]]
+                index = parent[index]
+            return index
+
+        def union(left: int, right: int) -> None:
+            left_root = find(left)
+            right_root = find(right)
+            if left_root != right_root:
+                parent[right_root] = left_root
+
+        similarity = normalized @ normalized.T
+        for left in range(len(normalized)):
+            for right in range(left + 1, len(normalized)):
+                if float(similarity[left, right]) >= threshold:
+                    union(left, right)
+
+        root_to_label: dict[int, int] = {}
+        labels = np.full(len(normalized), -1, dtype=int)
+        next_label = 0
+        for index in range(len(normalized)):
+            root = find(index)
+            if root not in root_to_label:
+                root_to_label[root] = next_label
+                next_label += 1
+            labels[index] = root_to_label[root]
+
+        probs = np.ones(len(normalized), dtype=float)
+        for label in set(labels.tolist()):
+            members = np.where(labels == label)[0]
+            if len(members) <= 1:
+                probs[members] = 1.0
+                continue
+            centroid = normalized[members].mean(axis=0)
+            centroid_norm = np.linalg.norm(centroid)
+            if centroid_norm == 0:
+                probs[members] = 0.75
+                continue
+            centroid = centroid / centroid_norm
+            member_scores = normalized[members] @ centroid
+            probs[members] = np.clip(member_scores, 0.55, 0.99)
+
         return labels, probs
+
+    @staticmethod
+    def _normalize_embeddings(embeddings: np.ndarray) -> np.ndarray:
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        return embeddings / norms
 
     def _export_parquet(self, run_id: str) -> None:
         if self._db is None:

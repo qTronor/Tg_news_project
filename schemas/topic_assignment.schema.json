@@ -1,0 +1,127 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tg-news-project.local/schemas/topic_assignment.v1.json",
+  "title": "Topic Assignment Event",
+  "description": "Message enriched with topic clustering assignment",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "event_timestamp",
+    "event_version",
+    "source_system",
+    "trace_id",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_]+:[0-9]+$"
+    },
+    "event_type": {
+      "type": "string",
+      "const": "topic_assignment"
+    },
+    "event_timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "event_version": {
+      "type": "string",
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "source_system": {
+      "type": "string"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "message_id",
+        "channel",
+        "topic_id",
+        "public_cluster_id",
+        "cluster_id",
+        "run_id",
+        "cluster_probability",
+        "model",
+        "clustering",
+        "assigned_at"
+      ],
+      "properties": {
+        "message_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "channel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "topic_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "public_cluster_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cluster_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bucket_id": {
+          "type": ["string", "null"]
+        },
+        "cluster_probability": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "model": {
+          "type": "object",
+          "required": ["name", "version"],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            },
+            "framework": {
+              "type": "string"
+            }
+          }
+        },
+        "clustering": {
+          "type": "object",
+          "required": ["algorithm"],
+          "properties": {
+            "algorithm": {
+              "type": "string"
+            },
+            "window_start": {
+              "type": ["string", "null"],
+              "format": "date-time"
+            },
+            "window_end": {
+              "type": ["string", "null"],
+              "format": "date-time"
+            }
+          }
+        },
+        "assigned_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

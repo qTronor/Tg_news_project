@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class KafkaConfig(BaseModel):
     bootstrap_servers: str = "localhost:9092"
     input_topic: str = "preprocessed.messages"
+    output_topic: str = "topic.assignments"
     dlq_topic: str = "dlq.topic_clustering"
     consumer_group: str = "topic-clusterer-group"
     client_id: str = "topic-clusterer"
@@ -57,6 +58,7 @@ class HealthConfig(BaseModel):
 
 class SchemaConfig(BaseModel):
     preprocessed_message_path: Path = Path("schemas/preprocessed_message.schema.json")
+    topic_assignment_path: Path = Path("schemas/topic_assignment.schema.json")
 
 
 class LoggingConfig(BaseModel):
@@ -64,9 +66,11 @@ class LoggingConfig(BaseModel):
 
 
 class ModelConfig(BaseModel):
-    sbert_model: str = "ai-forever/sbert_large_nlu_ru"
-    device: str = "cpu"
-    batch_size: int = 64
+    sbert_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    cache_dir: Optional[str] = None
+    device: str = "auto"
+    use_float16: bool = True
+    batch_size: int = 32
     normalize_embeddings: bool = True
     version: str = "1.0.0"
 
@@ -75,10 +79,12 @@ class ClusteringConfig(BaseModel):
     window_hours: int = 6
     min_cluster_size: int = 5
     min_samples: int = 3
+    trigger_min_messages: int = 1
     n_neighbors: int = 15
     min_dist: float = 0.1
     umap_n_components: int = 50
-    scheduler_interval_seconds: int = 3600
+    fallback_similarity_threshold: float = 0.68
+    scheduler_interval_seconds: int = 30
 
 
 class StorageConfig(BaseModel):

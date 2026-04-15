@@ -66,10 +66,12 @@ class LoggingConfig(BaseModel):
 
 
 class ModelConfig(BaseModel):
-    name: str = "blanchefort/rubert-base-cased-sentiment"
+    name: str = "cointegrated/rubert-tiny-sentiment-balanced"
     local_path: Optional[str] = None
     label2id_path: Optional[str] = None
-    device: str = "cpu"
+    cache_dir: Optional[str] = None
+    device: str = "auto"
+    use_float16: bool = True
     batch_size: int = 32
     max_length: int = 384
     chunk_overlap: int = 64

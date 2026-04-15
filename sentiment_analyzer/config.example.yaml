@@ -28,10 +28,12 @@ schemas:
   sentiment_enriched_path: "/app/schemas/sentiment_enriched.schema.json"
 
 model:
-  name: "blanchefort/rubert-base-cased-sentiment"
+  name: "cointegrated/rubert-tiny-sentiment-balanced"
   # local_path: "/app/models/sentiment_clf"  # uncomment to use fine-tuned model
   # label2id_path: "/app/models/sentiment_clf/label2id.json"
-  device: "cpu"
+  # cache_dir: "/models/hf-cache"
+  device: "auto"
+  use_float16: true
   batch_size: 32
   max_length: 384
   chunk_overlap: 64

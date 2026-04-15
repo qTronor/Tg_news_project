@@ -333,7 +333,7 @@ Kafka: raw.telegram.messages
     │         │
     │         ├──► ner_extractor (Natasha)  →  PG: ner_results  →  Kafka: ner.enriched
     │         │
-    │         └──► topic_clusterer (SBERT+UMAP+HDBSCAN)  →  PG: cluster_results
+    │         └──► topic_clusterer (SBERT+UMAP+HDBSCAN)  →  PG: cluster_runs_pg + cluster_assignments  →  Kafka: topic.assignments
     │
     │    sentiment.enriched + ner.enriched
     │         │
@@ -363,7 +363,7 @@ User Browser
 | 2 | preprocessor | `raw.telegram.messages`, `persisted.messages` | `preprocessed.messages` | PG: `preprocessed_messages` |
 | 3 | sentiment_analyzer | `preprocessed.messages` | `sentiment.enriched` | PG: `sentiment_results` |
 | 4 | ner_extractor | `preprocessed.messages` | `ner.enriched` | PG: `ner_results` |
-| 5 | topic_clusterer | `preprocessed.messages` | — | PG: `cluster_results` |
+| 5 | topic_clusterer | `preprocessed.messages` | `topic.assignments` | PG: `cluster_runs_pg`, `cluster_assignments` |
 | 6 | graph-builder | `sentiment.enriched`, `ner.enriched` | `graph.updates` | — |
 | 7 | neo4j-writer | `graph.updates` | — | Neo4j |
 

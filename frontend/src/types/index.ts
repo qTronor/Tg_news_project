@@ -165,6 +165,12 @@ export interface AppConfig {
 }
 
 export type UserRole = "admin" | "user";
+export type UserSourceStatus =
+  | "validating"
+  | "validation_failed"
+  | "live_enabled"
+  | "backfilling"
+  | "ready";
 
 export interface UserProfile {
   id: string;
@@ -199,4 +205,33 @@ export interface ChannelVisibility {
   channel_name: string;
   is_visible: boolean;
   updated_at: string | null;
+}
+
+export interface UserTelegramChannel {
+  channel_name: string;
+  input_value: string | null;
+  telegram_url: string | null;
+  telegram_channel_id: number | null;
+  requested_start_date: string | null;
+  historical_limit_date: string;
+  status: UserSourceStatus;
+  validation_status: "pending" | "validated" | "failed";
+  validation_error: string | null;
+  live_enabled: boolean;
+  backfill_total_days: number;
+  backfill_completed_days: number;
+  backfill_failed_days: number;
+  backfill_pending_days: number;
+  backfill_running_days: number;
+  backfill_retrying_days: number;
+  backfill_messages_published: number;
+  backfill_last_completed_date: string | null;
+  last_live_collected_at: string | null;
+  added_at: string;
+  added_by_user_id: string | null;
+  first_message_at: string | null;
+  first_message_event_id: string | null;
+  first_message_available: boolean;
+  raw_message_count: number;
+  feed_path: string | null;
 }

@@ -13,9 +13,19 @@ channels:
 collection:
   lookback_days: 3
 
+analytics_db:
+  enabled: true
+
 kafka:
   enabled: true
   topic: "raw.telegram.messages"
+
+backfill:
+  enabled: true
+  global_concurrency: 1
+  max_jobs_per_cycle: 1
+  max_attempts: 3
+  retry_backoff_seconds: 60
 
 output:
   data_dir: "data"
@@ -24,7 +34,7 @@ output:
 
 scheduler:
   enabled: true
-  interval_seconds: 3600
+  interval_seconds: 60
 
 logging:
   level: "INFO"

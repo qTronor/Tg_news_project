@@ -17,6 +17,8 @@ const dictionaries = {
     "nav.audit": "Аудит",
     "nav.admin": "АДМИН",
 
+    "nav.sources": "Sources",
+
     // Header
     "header.demo": "Демо",
     "header.live": "Live",
@@ -196,6 +198,7 @@ const dictionaries = {
     "nav.topics": "Topics",
     "nav.entities": "Entities",
     "nav.graph": "Graph",
+    "nav.sources": "Sources",
     "nav.settings": "Settings",
     "nav.channels": "Channels",
     "nav.audit": "Audit",

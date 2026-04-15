@@ -4,6 +4,7 @@ from functools import lru_cache
 
 class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:postgres@postgres:5432/tg_news_auth"
+    analytics_database_url: str = "postgresql+asyncpg://postgres:postgres@postgres:5432/telegram_news"
 
     jwt_secret_key: str = "CHANGE-ME-in-production-use-KMS"
     jwt_algorithm: str = "HS256"

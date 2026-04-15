@@ -6,6 +6,7 @@ event_version: "v1.0.0"
 kafka:
   bootstrap_servers: "kafka:9093"
   input_topic: "preprocessed.messages"
+  output_topic: "topic.assignments"
   dlq_topic: "dlq.topic_clustering"
   consumer_group: "topic-clusterer-group"
   client_id: "topic-clusterer"
@@ -24,11 +25,14 @@ postgres:
 
 schemas:
   preprocessed_message_path: "/app/schemas/preprocessed_message.schema.json"
+  topic_assignment_path: "/app/schemas/topic_assignment.schema.json"
 
 model:
-  sbert_model: "ai-forever/sbert_large_nlu_ru"
-  device: "cpu"
-  batch_size: 64
+  sbert_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+  # cache_dir: "/models/hf-cache"
+  device: "auto"
+  use_float16: true
+  batch_size: 32
   normalize_embeddings: true
   version: "1.0.0"
 
@@ -36,10 +40,12 @@ clustering:
   window_hours: 6
   min_cluster_size: 5
   min_samples: 3
+  trigger_min_messages: 1
   n_neighbors: 15
   min_dist: 0.1
   umap_n_components: 50
-  scheduler_interval_seconds: 3600
+  fallback_similarity_threshold: 0.68
+  scheduler_interval_seconds: 30
 
 storage:
   db_path: "data/topic_clusters.db"

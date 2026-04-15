@@ -100,7 +100,28 @@ VALUES (
     $10, $11, $12, $13, $14, $15, $16,
     $17, $18, $19, $20, $21, $22, $23
 )
-ON CONFLICT (channel, message_id) DO NOTHING
+ON CONFLICT (channel, message_id) DO UPDATE
+SET preprocessed_message_id = EXCLUDED.preprocessed_message_id,
+    event_id = EXCLUDED.event_id,
+    sentiment_label = EXCLUDED.sentiment_label,
+    sentiment_score = EXCLUDED.sentiment_score,
+    positive_prob = EXCLUDED.positive_prob,
+    negative_prob = EXCLUDED.negative_prob,
+    neutral_prob = EXCLUDED.neutral_prob,
+    emotion_anger = EXCLUDED.emotion_anger,
+    emotion_fear = EXCLUDED.emotion_fear,
+    emotion_joy = EXCLUDED.emotion_joy,
+    emotion_sadness = EXCLUDED.emotion_sadness,
+    emotion_surprise = EXCLUDED.emotion_surprise,
+    emotion_disgust = EXCLUDED.emotion_disgust,
+    aspects = EXCLUDED.aspects,
+    model_name = EXCLUDED.model_name,
+    model_version = EXCLUDED.model_version,
+    model_framework = EXCLUDED.model_framework,
+    event_timestamp = EXCLUDED.event_timestamp,
+    trace_id = EXCLUDED.trace_id,
+    processing_time_ms = EXCLUDED.processing_time_ms,
+    analyzed_at = EXCLUDED.analyzed_at
 RETURNING id;
 """
 
@@ -176,25 +197,52 @@ class SentimentAnalyzerService:
         self._health_site: Optional[web.TCPSite] = None
         self._metrics_site: Optional[web.TCPSite] = None
 
-        self._device = torch.device(config.model.device)
-        model_source = self._load_model(config)
-        logger.info(
-            "sentiment model loaded source=%s num_labels=%s",
-            model_source,
-            self._sentiment_model.config.num_labels,
-        )
+        self._model_lock = asyncio.Lock()
+        self._device = self._resolve_device(config.model.device)
+        self._tokenizer = None
+        self._sentiment_model = None
+        self._custom_label_map: Optional[dict[int, str]] = None
+        logger.info("sentiment model configured device=%s", self._device.type)
+
+    @staticmethod
+    def _resolve_device(requested_device: str) -> torch.device:
+        normalized = (requested_device or "auto").strip().lower()
+        if normalized == "auto":
+            return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if normalized.startswith("cuda") and not torch.cuda.is_available():
+            logger.warning(
+                "cuda requested for sentiment model but unavailable, falling back to cpu"
+            )
+            return torch.device("cpu")
+        return torch.device(normalized)
 
     def _load_model(self, config: AppConfig) -> str:
         local_path = config.model.local_path
+        model_kwargs = {}
+        if (
+            self._device.type == "cuda"
+            and config.model.use_float16
+            and torch.cuda.is_available()
+        ):
+            model_kwargs["torch_dtype"] = torch.float16
+        if config.model.cache_dir:
+            model_kwargs["cache_dir"] = config.model.cache_dir
+
         if local_path and Path(local_path).exists():
             logger.info(
                 "loading fine-tuned model from local_path=%s device=%s",
                 local_path,
-                config.model.device,
+                self._device.type,
             )
-            self._tokenizer = AutoTokenizer.from_pretrained(local_path)
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                local_path,
+                cache_dir=config.model.cache_dir,
+            )
             self._sentiment_model = (
-                AutoModelForSequenceClassification.from_pretrained(local_path)
+                AutoModelForSequenceClassification.from_pretrained(
+                    local_path,
+                    **model_kwargs,
+                )
                 .to(self._device)
             )
             self._sentiment_model.eval()
@@ -204,16 +252,35 @@ class SentimentAnalyzerService:
         logger.info(
             "loading pretrained model name=%s device=%s",
             config.model.name,
-            config.model.device,
+            self._device.type,
         )
-        self._tokenizer = AutoTokenizer.from_pretrained(config.model.name)
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            config.model.name,
+            cache_dir=config.model.cache_dir,
+        )
         self._sentiment_model = (
-            AutoModelForSequenceClassification.from_pretrained(config.model.name)
+            AutoModelForSequenceClassification.from_pretrained(
+                config.model.name,
+                **model_kwargs,
+            )
             .to(self._device)
         )
         self._sentiment_model.eval()
         self._custom_label_map = None
         return f"hub:{config.model.name}"
+
+    async def _ensure_model_loaded(self) -> None:
+        if self._sentiment_model is not None and self._tokenizer is not None:
+            return
+        async with self._model_lock:
+            if self._sentiment_model is not None and self._tokenizer is not None:
+                return
+            model_source = self._load_model(self._config)
+            logger.info(
+                "sentiment model loaded source=%s num_labels=%s",
+                model_source,
+                self._sentiment_model.config.num_labels,
+            )
 
     @staticmethod
     def _load_label_map(
@@ -543,7 +610,7 @@ class SentimentAnalyzerService:
                         reason="missing_upstream",
                     )
 
-                result = self._analyze_sentiment(context.original_text)
+                result = await self._analyze_sentiment(context.original_text)
                 processing_time_ms = (
                     time.monotonic() - processing_started
                 ) * 1000.0
@@ -614,7 +681,8 @@ class SentimentAnalyzerService:
 
     # ── sentiment inference ─────────────────────────────────────────
 
-    def _analyze_sentiment(self, text: str) -> dict:
+    async def _analyze_sentiment(self, text: str) -> dict:
+        await self._ensure_model_loaded()
         if not text or not text.strip():
             return {
                 "label": "neutral",
@@ -664,6 +732,8 @@ class SentimentAnalyzerService:
         return {"negative": 0, "neutral": 1, "positive": 2}
 
     def _aggregate_logits(self, text: str) -> np.ndarray:
+        if self._tokenizer is None or self._sentiment_model is None:
+            raise RuntimeError("sentiment model is not loaded")
         token_ids = self._tokenizer.encode(text, add_special_tokens=False)
         if not token_ids:
             return np.zeros(self._sentiment_model.config.num_labels, dtype=float)

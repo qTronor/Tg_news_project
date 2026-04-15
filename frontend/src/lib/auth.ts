@@ -1,6 +1,7 @@
 "use client";
 
 import { config } from "./config";
+import type { UserTelegramChannel } from "@/types";
 
 const AUTH_BASE = config.authBaseUrl;
 
@@ -17,6 +18,20 @@ export interface UserProfile {
   role: "admin" | "user";
   is_active: boolean;
   created_at: string;
+}
+
+export class AuthApiError extends Error {
+  code: string | null;
+  meta: Record<string, unknown> | null;
+  status: number;
+
+  constructor(message: string, options: { code?: string | null; meta?: Record<string, unknown> | null; status: number }) {
+    super(message);
+    this.name = "AuthApiError";
+    this.code = options.code ?? null;
+    this.meta = options.meta ?? null;
+    this.status = options.status;
+  }
 }
 
 const TOKEN_KEY = "tg_access_token";
@@ -105,11 +120,22 @@ async function authFetch<T>(path: string, options: RequestInit = {}): Promise<T>
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("auth:logout"));
     }
-    throw new Error("Unauthorized");
+    throw new AuthApiError("Unauthorized", { status: 401 });
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `API error ${res.status}`);
+    const detail = body.detail as
+      | { detail?: string; error?: string; meta?: Record<string, unknown> | null }
+      | string
+      | undefined;
+    if (detail && typeof detail === "object") {
+      throw new AuthApiError(detail.detail || `API error ${res.status}`, {
+        code: detail.error,
+        meta: detail.meta ?? null,
+        status: res.status,
+      });
+    }
+    throw new AuthApiError(detail || `API error ${res.status}`, { status: res.status });
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -235,5 +261,24 @@ export const authApi = {
     return authFetch("/api/auth/resend-verification", {
       method: "POST",
     });
+  },
+
+  addTelegramChannel(channel: string, startDate: string): Promise<UserTelegramChannel> {
+    return authFetch("/api/sources/telegram/channels", {
+      method: "POST",
+      body: JSON.stringify({ channel, start_date: startDate }),
+    });
+  },
+
+  getTelegramChannels(): Promise<UserTelegramChannel[]> {
+    return authFetch("/api/sources/telegram/channels");
+  },
+
+  getTelegramChannel(channelName: string): Promise<UserTelegramChannel> {
+    return authFetch(`/api/sources/telegram/channels/${encodeURIComponent(channelName)}`);
+  },
+
+  getTelegramChannelProgress(channelName: string): Promise<UserTelegramChannel> {
+    return authFetch(`/api/sources/telegram/channels/${encodeURIComponent(channelName)}/progress`);
   },
 };
