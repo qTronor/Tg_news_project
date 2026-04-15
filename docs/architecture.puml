@@ -1,0 +1,75 @@
+@startuml
+title Telegram News Pipeline — Concept Component Diagram
+
+left to right direction
+
+skinparam shadowing false
+skinparam componentStyle uml2
+skinparam defaultTextAlignment center
+skinparam wrapWidth 160
+skinparam linetype ortho
+skinparam nodesep 60
+skinparam ranksep 70
+skinparam component {
+  BackgroundColor #F7F7F7
+  BorderColor #333333
+}
+skinparam database {
+  BackgroundColor #FFF7E6
+  BorderColor #8A5A00
+}
+
+actor "Пользователь" as user
+cloud "Внешние источники\nконтента" as source
+
+component [Клиентское\nприложение] as ui
+
+package "Платформа обработки" {
+  component [API и управление\nдоступом] as api
+  component [Контур сбора и\nподготовки данных] as ingestion
+  component [Контур аналитики\nAI/NLP] as analytics
+  component [Контур графовой\nаналитики] as graph
+  component [Контур дообучения\nмоделей] as mlops
+}
+
+package "Платформенные ресурсы" {
+  component [Событийная\nшина] as bus
+  database [Хранилища\nданных] as storage
+  component [Мониторинг и\nадминистрирование] as observability
+}
+
+interface "IClient" as i_client
+interface "IDataAccess" as i_data
+interface "IEventStream" as i_events
+interface "IModelLifecycle" as i_model
+interface "IMetrics" as i_metrics
+
+user --> ui : работа в UI
+source --> ingestion : поток контента
+
+ui --( i_client : клиентский доступ
+api - i_client : предоставляет API
+
+api --( i_data : чтение/запись
+storage - i_data : доступ к данным
+
+ingestion --( i_events : публикация событий
+analytics --( i_events : потребление/публикация
+graph --( i_events : потребление/публикация
+mlops --( i_events : триггеры обучения
+bus - i_events : event backbone
+
+analytics --> storage : результаты анализа
+graph --> storage : графовые данные
+
+mlops --( i_model : версии моделей
+analytics - i_model : inference по версии
+
+api --> observability : аудит и метрики
+observability - i_metrics
+ingestion --( i_metrics : pipeline метрики
+analytics --( i_metrics : quality/latency
+graph --( i_metrics : graph метрики
+mlops --( i_metrics : ML quality
+
+@enduml

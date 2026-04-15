@@ -1,12 +1,27 @@
 services:
   telegram-collector:
     build: .
+    command: ["service", "--config", "config.yaml"]
     environment:
       TG_API_ID: "${TG_API_ID}"
       TG_API_HASH: "${TG_API_HASH}"
       # Preferred for non-interactive mode:
       TG_STRING_SESSION: "${TG_STRING_SESSION}"
+      COLLECTOR_KAFKA_BOOTSTRAP_SERVERS: "kafka:9093"
+      COLLECTOR_ANALYTICS_DB_HOST: "postgres"
+      COLLECTOR_ANALYTICS_DB_PORT: "5432"
+      COLLECTOR_ANALYTICS_DB_NAME: "${DB_NAME:-telegram_news}"
+      COLLECTOR_ANALYTICS_DB_USER: "${DB_USER:-postgres}"
+      COLLECTOR_ANALYTICS_DB_PASSWORD: "${DB_PASSWORD}"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./data:/app/data
       - ./state:/app/state
+    networks:
+      - default
+      - telegram-news-network
+
+networks:
+  telegram-news-network:
+    external: true
+    name: tg_news_project_telegram-news-network

@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  topic-clusterer:
+    build:
+      context: ..
+      dockerfile: topic_clusterer/Dockerfile
+    container_name: topic-clusterer
+    environment:
+      TOPIC_CLUSTERER__KAFKA__BOOTSTRAP_SERVERS: "kafka:9093"
+      TOPIC_CLUSTERER__POSTGRES__HOST: "postgres"
+      TOPIC_CLUSTERER__POSTGRES__PORT: "5432"
+      TOPIC_CLUSTERER__POSTGRES__DATABASE: "${DB_NAME:-telegram_news}"
+      TOPIC_CLUSTERER__POSTGRES__USER: "${DB_USER:-postgres}"
+      TOPIC_CLUSTERER__POSTGRES__PASSWORD: "${DB_PASSWORD}"
+      TOPIC_CLUSTERER__MODEL__DEVICE: "${MODEL_DEVICE:-auto}"
+    volumes:
+      - topic-clusterer-data:/app/data
+      - topic-model-cache:/root/.cache/huggingface
+    ports:
+      - "8032:8000"
+      - "8033:8001"
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+volumes:
+  topic-clusterer-data:
+  topic-model-cache:
+
+networks:
+  telegram-news-network:
+    external: true
+    name: telegram-news-network

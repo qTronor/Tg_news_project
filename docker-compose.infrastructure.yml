@@ -152,6 +152,278 @@ services:
       - telegram-news-network
 
   # =====================================================
+  # Frontend - Next.js Web Application
+  # =====================================================
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:${ANALYTICS_PORT:-8020}
+        NEXT_PUBLIC_AUTH_BASE_URL: http://localhost:${AUTH_PORT:-8030}
+        NEXT_PUBLIC_POLLING_INTERVAL: ${POLLING_INTERVAL:-15000}
+    container_name: telegram-news-frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000',r=>{process.exit(r.statusCode===200?0:1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+  # =====================================================
+  # Analytics API - PostgreSQL-backed read API for frontend
+  # =====================================================
+  analytics-api:
+    build: ./analytics_api
+    container_name: telegram-news-analytics-api
+    ports:
+      - "${ANALYTICS_PORT:-8020}:8020"
+      - "8021:8021"
+    environment:
+      ANALYTICS_API__POSTGRES__HOST: postgres
+      ANALYTICS_API__POSTGRES__PORT: 5432
+      ANALYTICS_API__POSTGRES__DATABASE: ${DB_NAME:-telegram_news}
+      ANALYTICS_API__POSTGRES__USER: ${DB_USER:-postgres}
+      ANALYTICS_API__POSTGRES__PASSWORD: ${DB_PASSWORD:?Database password required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8020/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+  # =====================================================
+  # Auth Service - User Authentication & Authorization
+  # =====================================================
+  auth-service:
+    build: ./auth_service
+    container_name: telegram-news-auth
+    ports:
+      - "${AUTH_PORT:-8030}:8030"
+    environment:
+      AUTH_DATABASE_URL: postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD:?Database password required}@postgres:5432/tg_news_auth
+      AUTH_ANALYTICS_DATABASE_URL: postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD:?Database password required}@postgres:5432/${DB_NAME:-telegram_news}
+      AUTH_JWT_SECRET_KEY: ${AUTH_JWT_SECRET:?Auth JWT secret required}
+      AUTH_JWT_ALGORITHM: HS256
+      AUTH_ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      AUTH_REFRESH_TOKEN_EXPIRE_DAYS: 30
+      AUTH_CORS_ORIGINS: '["http://localhost:3000"]'
+      AUTH_RATE_LIMIT_PER_MINUTE: 30
+      AUTH_ADMIN_BOOTSTRAP_EMAIL: ${ADMIN_EMAIL:-}
+      AUTH_ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_PASSWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8030/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+  # =====================================================
+  # Source Resolver - first source and propagation materialization
+  # =====================================================
+  source-resolver:
+    build: ./source_resolver
+    container_name: telegram-news-source-resolver
+    ports:
+      - "8040:8040"
+      - "8041:8041"
+    environment:
+      SOURCE_RESOLVER__POSTGRES__HOST: postgres
+      SOURCE_RESOLVER__POSTGRES__PORT: 5432
+      SOURCE_RESOLVER__POSTGRES__DATABASE: ${DB_NAME:-telegram_news}
+      SOURCE_RESOLVER__POSTGRES__USER: ${DB_USER:-postgres}
+      SOURCE_RESOLVER__POSTGRES__PASSWORD: ${DB_PASSWORD:?Database password required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8040/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+  # =====================================================
+  # Analysis pipeline
+  # =====================================================
+  sentiment-analyzer:
+    build:
+      context: .
+      dockerfile: sentiment_analyzer/Dockerfile
+    container_name: telegram-news-sentiment-analyzer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8012:8000"
+      - "8013:8001"
+    environment:
+      SENTIMENT_ANALYZER__KAFKA__BOOTSTRAP_SERVERS: kafka:9093
+      SENTIMENT_ANALYZER__POSTGRES__HOST: postgres
+      SENTIMENT_ANALYZER__POSTGRES__PORT: 5432
+      SENTIMENT_ANALYZER__POSTGRES__DATABASE: ${DB_NAME:-telegram_news}
+      SENTIMENT_ANALYZER__POSTGRES__USER: ${DB_USER:-postgres}
+      SENTIMENT_ANALYZER__POSTGRES__PASSWORD: ${DB_PASSWORD:?Database password required}
+      SENTIMENT_ANALYZER__MODEL__DEVICE: ${MODEL_DEVICE:-auto}
+    volumes:
+      - sentiment_model_cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+  ner-extractor:
+    build:
+      context: .
+      dockerfile: ner_extractor/Dockerfile
+    container_name: telegram-news-ner-extractor
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8014:8000"
+      - "8015:8001"
+    environment:
+      NER_EXTRACTOR__KAFKA__BOOTSTRAP_SERVERS: kafka:9093
+      NER_EXTRACTOR__POSTGRES__HOST: postgres
+      NER_EXTRACTOR__POSTGRES__PORT: 5432
+      NER_EXTRACTOR__POSTGRES__DATABASE: ${DB_NAME:-telegram_news}
+      NER_EXTRACTOR__POSTGRES__USER: ${DB_USER:-postgres}
+      NER_EXTRACTOR__POSTGRES__PASSWORD: ${DB_PASSWORD:?Database password required}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+  topic-clusterer:
+    build:
+      context: .
+      dockerfile: topic_clusterer/Dockerfile
+    container_name: telegram-news-topic-clusterer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8032:8000"
+      - "8033:8001"
+    environment:
+      TOPIC_CLUSTERER__KAFKA__BOOTSTRAP_SERVERS: kafka:9093
+      TOPIC_CLUSTERER__POSTGRES__HOST: postgres
+      TOPIC_CLUSTERER__POSTGRES__PORT: 5432
+      TOPIC_CLUSTERER__POSTGRES__DATABASE: ${DB_NAME:-telegram_news}
+      TOPIC_CLUSTERER__POSTGRES__USER: ${DB_USER:-postgres}
+      TOPIC_CLUSTERER__POSTGRES__PASSWORD: ${DB_PASSWORD:?Database password required}
+      TOPIC_CLUSTERER__MODEL__DEVICE: ${MODEL_DEVICE:-auto}
+    volumes:
+      - topic_clusterer_data:/app/data
+      - topic_model_cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+  # =====================================================
+  # Telegram collector and raw persistence
+  # =====================================================
+  telegram-collector:
+    build: ./rbc_telegram_collector
+    container_name: telegram-news-collector
+    command: ["service", "--config", "config.yaml"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      TG_API_ID: ${TG_API_ID:?Telegram API ID required}
+      TG_API_HASH: ${TG_API_HASH:?Telegram API hash required}
+      TG_STRING_SESSION: ${TG_STRING_SESSION:?Telegram string session required}
+      COLLECTOR_KAFKA_BOOTSTRAP_SERVERS: kafka:9093
+      COLLECTOR_ANALYTICS_DB_HOST: postgres
+      COLLECTOR_ANALYTICS_DB_PORT: 5432
+      COLLECTOR_ANALYTICS_DB_NAME: ${DB_NAME:-telegram_news}
+      COLLECTOR_ANALYTICS_DB_USER: ${DB_USER:-postgres}
+      COLLECTOR_ANALYTICS_DB_PASSWORD: ${DB_PASSWORD:?Database password required}
+    volumes:
+      - ./rbc_telegram_collector/config.yaml:/app/config.yaml:ro
+      - ./rbc_telegram_collector/data:/app/data
+      - ./rbc_telegram_collector/state:/app/state
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+  message-persister:
+    build:
+      context: .
+      dockerfile: message_persister/Dockerfile
+    container_name: telegram-news-message-persister
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      MESSAGE_PERSISTER__KAFKA__BOOTSTRAP_SERVERS: kafka:9093
+      MESSAGE_PERSISTER__POSTGRES__HOST: postgres
+      MESSAGE_PERSISTER__POSTGRES__PORT: 5432
+      MESSAGE_PERSISTER__POSTGRES__DATABASE: ${DB_NAME:-telegram_news}
+      MESSAGE_PERSISTER__POSTGRES__USER: ${DB_USER:-postgres}
+      MESSAGE_PERSISTER__POSTGRES__PASSWORD: ${DB_PASSWORD:?Database password required}
+    volumes:
+      - ./message_persister/config.yaml:/app/message_persister/config.yaml:ro
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+    command: ["python", "/app/message_persister/main.py", "--config", "/app/message_persister/config.yaml"]
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+  # =====================================================
   # Redis - Caching & Deduplication
   # =====================================================
   redis:
@@ -245,6 +517,12 @@ volumes:
   kafka_data:
     driver: local
   redis_data:
+    driver: local
+  sentiment_model_cache:
+    driver: local
+  topic_clusterer_data:
+    driver: local
+  topic_model_cache:
     driver: local
   prometheus_data:
     driver: local

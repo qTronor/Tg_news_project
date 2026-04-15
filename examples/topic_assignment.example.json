@@ -1,0 +1,29 @@
+{
+  "event_id": "demo:1",
+  "event_type": "topic_assignment",
+  "event_timestamp": "2026-04-13T12:00:00Z",
+  "event_version": "v1.0.0",
+  "source_system": "topic-clusterer",
+  "trace_id": "550e8400-e29b-41d4-a716-446655440000",
+  "payload": {
+    "message_id": 1,
+    "channel": "demo",
+    "topic_id": "run_7ad3ef1c2b40:0",
+    "public_cluster_id": "run_7ad3ef1c2b40:0",
+    "cluster_id": 0,
+    "run_id": "run_7ad3ef1c2b40",
+    "bucket_id": "2026-04-13 12:00:00+00:00",
+    "cluster_probability": 0.99,
+    "model": {
+      "name": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "version": "1.0.0",
+      "framework": "sentence-transformers"
+    },
+    "clustering": {
+      "algorithm": "similarity_fallback_v1.0.0",
+      "window_start": "2026-04-13T12:00:00Z",
+      "window_end": "2026-04-13T12:00:00Z"
+    },
+    "assigned_at": "2026-04-13T12:00:00Z"
+  }
+}

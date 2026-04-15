@@ -1,0 +1,151 @@
+from datetime import date, datetime
+from uuid import UUID
+
+from pydantic import BaseModel, EmailStr, Field
+
+
+class UserRegister(BaseModel):
+    email: EmailStr
+    username: str = Field(min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
+    password: str = Field(min_length=8, max_length=128)
+
+
+class UserLogin(BaseModel):
+    login: str = Field(description="Email or username")
+    password: str
+
+
+class TokenPair(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class UserProfile(BaseModel):
+    id: UUID
+    email: str
+    username: str
+    role: str
+    is_active: bool
+    email_verified: bool = False
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class UserUpdate(BaseModel):
+    username: str | None = Field(None, min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
+    email: EmailStr | None = None
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class MessageEdit(BaseModel):
+    sentiment_score: float | None = Field(None, ge=-1.0, le=1.0)
+    sentiment_label: str | None = Field(None, max_length=20)
+    topic_label: str | None = Field(None, max_length=200)
+    cluster_id: int | None = None
+    entities: list[dict] | None = None
+
+
+class ChannelVisibilityUpdate(BaseModel):
+    is_visible: bool
+
+
+class ChannelInfo(BaseModel):
+    channel_name: str
+    is_visible: bool
+    updated_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class ReactionRequest(BaseModel):
+    reaction: str = Field(pattern=r"^(like|dislike)$")
+
+
+class ReactionInfo(BaseModel):
+    message_event_id: str
+    likes: int = 0
+    dislikes: int = 0
+    user_reaction: str | None = None
+
+
+class AuditLogEntry(BaseModel):
+    id: UUID
+    admin_id: UUID | None
+    admin_username: str | None = None
+    action: str
+    target_type: str | None
+    target_id: str | None
+    old_value: dict | None
+    new_value: dict | None
+    ip_address: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ApiErrorResponse(BaseModel):
+    error: str
+    detail: str
+    meta: dict | None = None
+
+
+class TelegramChannelCreateRequest(BaseModel):
+    channel: str = Field(min_length=1, max_length=512)
+    start_date: date
+
+
+class TelegramChannelStatus(BaseModel):
+    channel_name: str
+    input_value: str | None = None
+    telegram_url: str | None = None
+    telegram_channel_id: int | None = None
+    requested_start_date: date | None = None
+    historical_limit_date: date
+    status: str
+    validation_status: str
+    validation_error: str | None = None
+    live_enabled: bool
+    backfill_total_days: int
+    backfill_completed_days: int
+    backfill_failed_days: int
+    backfill_pending_days: int
+    backfill_running_days: int
+    backfill_retrying_days: int
+    backfill_messages_published: int
+    backfill_last_completed_date: date | None = None
+    last_live_collected_at: datetime | None = None
+    added_at: datetime
+    added_by_user_id: UUID | None = None
+    first_message_at: datetime | None = None
+    first_message_event_id: str | None = None
+    first_message_available: bool
+    raw_message_count: int = 0
+    feed_path: str | None = None
+
+
+class TelegramChannelProgress(TelegramChannelStatus):
+    pass

@@ -66,6 +66,11 @@
           "minLength": 1,
           "maxLength": 255
         },
+        "channel_id": {
+          "type": ["integer", "null"],
+          "description": "Telegram numeric channel ID",
+          "minimum": 1
+        },
         "text": {
           "type": ["string", "null"],
           "description": "Message text content"
@@ -121,6 +126,16 @@
             }
           }
         },
+        "permalink": {
+          "type": ["string", "null"],
+          "format": "uri",
+          "description": "Public Telegram permalink for the message"
+        },
+        "grouped_id": {
+          "type": ["integer", "null"],
+          "description": "Telegram media group identifier",
+          "minimum": 1
+        },
         "edit_date": {
           "type": ["string", "null"],
           "format": "date-time",
@@ -131,9 +146,18 @@
           "description": "ID of the message this is replying to",
           "minimum": 1
         },
+        "reply_to_top_message_id": {
+          "type": ["integer", "null"],
+          "description": "Top-level thread message ID for replies",
+          "minimum": 1
+        },
         "author": {
           "type": ["string", "null"],
           "description": "Message author (if available)"
+        },
+        "post_author": {
+          "type": ["string", "null"],
+          "description": "Telegram post author label for channel posts"
         },
         "is_forwarded": {
           "type": "boolean",
@@ -143,6 +167,25 @@
         "forward_from_channel": {
           "type": ["string", "null"],
           "description": "Original channel if forwarded"
+        },
+        "forward_from_channel_id": {
+          "type": ["integer", "null"],
+          "description": "Original numeric channel ID if forwarded from a channel",
+          "minimum": 1
+        },
+        "forward_from_message_id": {
+          "type": ["integer", "null"],
+          "description": "Original message ID if Telegram exposed it",
+          "minimum": 1
+        },
+        "forward_date": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Original forward timestamp from Telegram metadata"
+        },
+        "forward_origin_type": {
+          "type": ["string", "null"],
+          "description": "Forward origin classification derived from Telegram metadata"
         }
       }
     }

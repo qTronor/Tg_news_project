@@ -1,9 +1,9 @@
 # Telegram collector (RBC + any channels)
 
-Сервис для выгрузки постов из публичных Telegram-каналов через MTProto (Telethon).
-По умолчанию в примере — официальный канал РБК `@rbc_news`.
+Service for exporting posts from public Telegram channels via MTProto using Telethon.
+Every run collects the last 3 calendar days and publishes raw events to Kafka so `message-persister` can persist them into Postgres.
 
-## 1) Быстрый старт (локально)
+## Quick start
 
 ```bash
 python -m venv .venv
@@ -16,9 +16,10 @@ pip install -r requirements.txt
 cp config.example.yaml config.yaml
 ```
 
-### Telegram API доступ
-Нужны `api_id` и `api_hash` (берутся на https://my.telegram.org).
-Укажите их переменными окружения:
+### Telegram API access
+
+You need `api_id` and `api_hash` from <https://my.telegram.org>.
+Set them as environment variables:
 
 ```bash
 # Windows PowerShell:
@@ -26,51 +27,73 @@ $env:TG_API_ID="123456"
 $env:TG_API_HASH="0123456789abcdef0123456789abcdef"
 ```
 
-### Вариант A (проще): интерактивный логин (создаст файл сессии)
-Первый запуск попросит телефон и код из Telegram, затем сохранит `.session` файл.
+### One-shot collection
+
+The first run may ask for phone and login code and then create a local `.session` file.
 
 ```bash
 python -m collector.cli collect --config config.yaml
 ```
 
-### Вариант B (идеально для микросервиса): StringSession (без интерактива)
-Сгенерируйте строковую сессию локально:
+### Scheduled service mode
+
+The default config already enables:
+
+```yaml
+collection:
+  lookback_days: 3
+
+kafka:
+  enabled: true
+  topic: raw.telegram.messages
+
+scheduler:
+  enabled: true
+  interval_seconds: 3600
+```
+
+Start the long-running service:
+
+```bash
+python -m collector.cli service --config config.yaml
+```
+
+The service runs one collection cycle immediately after startup and then repeats it on the configured interval.
+
+### StringSession for non-interactive runs
+
+Generate a reusable string session locally:
 
 ```bash
 python -m collector.cli make-session
 ```
 
-Сохраните выведенную строку в переменную окружения `TG_STRING_SESSION`, а затем запускайте сбор уже без вопросов.
+Save the printed value into `TG_STRING_SESSION` and use it for server or container runs.
 
-## 2) Выходные данные
+## Output
 
-По умолчанию пишет `data/<channel>.jsonl` (по строке JSON на пост).
-При повторном запуске использует `state/state.json` и докачивает только новые посты.
+The collector writes `data/<channel>.jsonl` for the current lookback window and also publishes the same messages to Kafka.
 
-## 3) Добавление других каналов
+## Adding channels
 
-Откройте `config.yaml` и добавьте еще один объект в `channels`.
+Open `config.yaml` and add more items under `channels`.
 
-## 4) Запуск через Docker Compose
+## Docker Compose
 
-1. Создайте файл `.env` в корне проекта:
+1. Create `.env` in this project folder:
+
 ```bash
-# .env
 TG_API_ID=your_api_id_here
 TG_API_HASH=your_api_hash_here
-# Опционально:
+# Optional:
 # TG_STRING_SESSION=your_string_session_here
 ```
 
-2. Убедитесь, что создан `config.yaml` (скопируйте из `config.example.yaml`)
+2. Make sure `config.yaml` exists.
+3. Run:
 
-3. Запустите:
 ```bash
 docker-compose up
 ```
 
-Docker Compose автоматически прочитает переменные из `.env` файла.
-
-## 5) Запуск на сервере
-
-См. подсказку в конце ответа ассистента (ssh/scp + venv + запуск).
+This compose file starts the collector in scheduled service mode and publishes raw events to Kafka via `host.docker.internal:9092`.

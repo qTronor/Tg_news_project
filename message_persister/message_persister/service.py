@@ -50,22 +50,32 @@ INSERT_RAW_MESSAGE_SQL = """
 INSERT INTO raw_messages (
     message_id,
     channel,
+    channel_id,
+    permalink,
     text,
     message_date,
     views,
     forwards,
     reactions,
     media,
+    grouped_id,
     edit_date,
     reply_to_message_id,
+    reply_to_top_message_id,
     author,
+    post_author,
     is_forwarded,
     forward_from_channel,
+    forward_from_channel_id,
+    forward_from_message_id,
+    forward_date,
+    forward_origin_type,
     event_timestamp,
     trace_id
 )
 VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
 )
 ON CONFLICT (channel, message_id) DO NOTHING
 RETURNING id;
@@ -119,6 +129,7 @@ class MessageContext:
     channel: str
     message_date_dt: datetime
     edit_date_dt: Optional[datetime]
+    forward_date_dt: Optional[datetime]
     payload: dict
     key: str
 
@@ -337,6 +348,9 @@ class MessagePersisterService:
         try:
             message_date_dt = parse_iso_datetime(payload["payload"]["date"])
             edit_date_dt = parse_optional_iso_datetime(payload["payload"].get("edit_date"))
+            forward_date_dt = parse_optional_iso_datetime(
+                payload["payload"].get("forward_date")
+            )
             event_timestamp_dt = parse_iso_datetime(event_timestamp)
             trace_id_uuid = UUID(trace_id)
         except ValueError as exc:
@@ -366,6 +380,7 @@ class MessagePersisterService:
             channel=channel,
             message_date_dt=message_date_dt,
             edit_date_dt=edit_date_dt,
+            forward_date_dt=forward_date_dt,
             payload=payload,
             key=key,
         )
@@ -417,17 +432,26 @@ class MessagePersisterService:
             INSERT_RAW_MESSAGE_SQL,
             payload["message_id"],
             payload["channel"],
+            payload.get("channel_id"),
+            payload.get("permalink"),
             payload.get("text"),
             context.message_date_dt,
             payload.get("views", 0),
             payload.get("forwards", 0),
             self._json_value(payload.get("reactions")),
             self._json_value(payload.get("media")),
+            payload.get("grouped_id"),
             context.edit_date_dt,
             payload.get("reply_to_message_id"),
-            payload.get("author"),
+            payload.get("reply_to_top_message_id"),
+            payload.get("author") or payload.get("post_author"),
+            payload.get("post_author") or payload.get("author"),
             payload.get("is_forwarded", False),
             payload.get("forward_from_channel"),
+            payload.get("forward_from_channel_id"),
+            payload.get("forward_from_message_id"),
+            context.forward_date_dt,
+            payload.get("forward_origin_type"),
             context.event_timestamp_dt,
             context.trace_id_uuid,
         )

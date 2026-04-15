@@ -217,7 +217,7 @@ function Start-CollectorIfNeeded() {
     return
   }
   Write-Info "Running collector (config.yaml controls channels/limits)"
-  & docker compose -f $CollectorCompose run --rm --build telegram-collector
+  & docker compose -f $CollectorCompose run --rm --build telegram-collector collect --config config.yaml
 }
 
 function Convert-MediaType($media) {

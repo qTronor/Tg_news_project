@@ -1,0 +1,56 @@
+@startuml
+title Telegram News Pipeline — Conceptual Sequence Diagram
+
+autonumber
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam ParticipantPadding 20
+skinparam BoxPadding 12
+
+actor "Внешние источники\nконтента" as SRC
+participant "Контур сбора и\nподготовки данных" as ING
+queue "Событийная шина\n(Kafka topics)" as BUS
+participant "Контур аналитики\nAI/NLP" as NLP
+participant "Контур тематической\nкластеризации" as TOPIC
+participant "Контур детекции\nновизны" as NOVEL
+participant "Контур дообучения\nмоделей" as MLOPS
+participant "Контур графовой\nаналитики" as GRAPH
+database "Хранилища данных\n(PostgreSQL/Neo4j/Object Storage)" as STORE
+participant "API и управление\nдоступом" as API
+participant "Клиентское\nприложение" as UI
+actor "Пользователь" as USER
+
+== Поток обработки сообщений ==
+SRC -> ING : поток сообщений
+ING -> BUS : публикация событий raw/persisted/preprocessed
+
+par Обогащение NLP
+  BUS -> NLP : сообщения для анализа
+  NLP -> STORE : тональность, сущности,\nпромежуточные результаты
+  NLP -> BUS : события обогащения
+else Тематический контур
+  BUS -> TOPIC : сообщения для тематизации
+  TOPIC -> STORE : кластеры и метрики тем
+  TOPIC -> BUS : topic assignments
+end
+
+== Новизна и адаптация моделей ==
+BUS -> NOVEL : сигналы тематизации
+NOVEL -> BUS : кандидаты новых тем
+BUS -> MLOPS : задачи разметки/обучения
+MLOPS -> STORE : датасеты, артефакты,\nверсии моделей
+MLOPS -> TOPIC : публикация новой версии модели
+
+== Графовая проекция ==
+BUS -> GRAPH : события аналитического обогащения
+GRAPH -> STORE : графовые обновления
+
+== Выдача результатов ==
+USER -> UI : аналитические запросы
+UI -> API : REST запросы
+API -> STORE : чтение аналитики и графа
+API --> UI : агрегированные ответы
+UI --> USER : лента, темы, сущности, граф
+
+@enduml

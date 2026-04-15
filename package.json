@@ -1,0 +1,25 @@
+{
+  "name": "tg_news_project",
+  "version": "1.0.0",
+  "description": "Полная спецификация контрактов данных для event-driven конвейера обработки новостей из Telegram.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "example": "examples",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qTronor/Tg_news_project.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/qTronor/Tg_news_project/issues"
+  },
+  "homepage": "https://github.com/qTronor/Tg_news_project#readme"
+}

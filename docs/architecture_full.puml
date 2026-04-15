@@ -1,0 +1,98 @@
+@startuml
+title Telegram News Pipeline — Component Diagram
+
+skinparam shadowing false
+skinparam componentStyle uml2
+skinparam defaultTextAlignment center
+skinparam wrapWidth 180
+
+package "Telegram News Pipeline" {
+
+  component [Frontend\n:3000] as fe
+  component [Auth Service\n:8030] as auth
+  component [Analytics API\n:8020] as ana
+  component [Collector] as collector
+  component [Kafka Bridge] as bridge
+  component [message_persister] as mp
+  component [preprocessor] as pp
+  component [sentiment_analyzer] as sa
+  component [ner_extractor] as ne
+  component [topic_clusterer] as tc
+  component [graph-builder] as gb
+  component [neo4j-writer] as nw
+
+  interface "IAuth" as iauth
+  interface "IAnalytics" as iana
+  interface "IQueue" as iq1
+  interface "IQueue" as iq2
+  interface "IQueue" as iq3
+  interface "IQueue" as iq4
+  interface "IAuthDB" as iauthdb
+  interface "IData" as idata
+  interface "IGraph" as igraph
+  interface "ICache" as icache
+  interface "ISMTP" as ismtp
+  interface "ITelegram" as itg
+
+  fe --( iauth
+  auth - iauth
+
+  fe --( iana
+  ana - iana
+
+  auth --( iauthdb
+  auth --( icache
+  auth --( ismtp
+
+  ana --( idata
+  ana --( igraph
+
+  collector --( itg
+  collector - iq1
+  bridge --( iq1
+
+  bridge - iq2
+  mp --( iq2
+  pp --( iq2
+
+  mp - idata
+  pp - idata
+
+  mp - iq3
+  pp - iq3
+  sa --( iq3
+  ne --( iq3
+  tc --( iq3
+
+  sa - idata
+  ne - idata
+  tc - idata
+
+  sa - iq4
+  ne - iq4
+  gb --( iq4
+
+  gb - igraph
+  nw --( igraph
+}
+
+database [PostgreSQL\ntelegram_news] as pg
+database [PostgreSQL\ntg_news_auth] as pg_auth
+database [Neo4j] as neo4j
+database [Redis] as redis
+
+iauthdb -- pg_auth
+idata -- pg
+igraph -- neo4j
+icache -- redis
+
+node [SMTP] as smtp
+ismtp -- smtp
+
+cloud [Telegram] as tg
+itg -- tg
+
+actor User as user
+user --> fe
+
+@enduml

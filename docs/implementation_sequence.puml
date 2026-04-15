@@ -1,0 +1,116 @@
+@startuml
+title Telegram News Pipeline — Sequence Diagram
+
+autonumber
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam ParticipantPadding 18
+skinparam BoxPadding 10
+
+actor "Telegram\nchannels" as TG
+participant "rbc_telegram_collector" as COL
+participant "kafka_bridge" as BR
+queue "raw.telegram.messages" as T_RAW
+participant "message_persister" as MP
+database "PostgreSQL" as PG
+queue "persisted.messages" as T_PER
+participant "preprocessor" as PP
+queue "preprocessed.messages" as T_PRE
+participant "sentiment_analyzer" as SA
+queue "sentiment.enriched" as T_SEN
+participant "ner_extractor" as NE
+queue "ner.enriched" as T_NER
+participant "topic_clusterer" as TC
+queue "topic.assignments" as T_ASSIGN
+participant "topic_novelty_detector" as ND
+queue "topic.novelty.candidates" as T_NOV
+participant "active_learning_sampler" as ALS
+queue "topic.labeling.tasks" as T_TASK
+participant "annotation_gateway" as AG
+queue "topic.labels" as T_LABEL
+participant "dataset_builder" as DBLD
+queue "ml.training.jobs" as T_JOB
+participant "training_orchestrator" as TORCH
+participant "model_trainer" as MTR
+queue "ml.training.results" as T_RES
+participant "model_evaluator" as MEV
+participant "model_registry" as MREG
+participant "model_deployer" as MDEP
+participant "graph-builder" as GB
+queue "graph.updates" as T_GRAPH
+participant "neo4j-writer" as NW
+database "Neo4j" as NEO
+participant "analytics_api" as API
+participant "auth_service" as AUTH
+participant "frontend" as FE
+
+note over MP,TC
+  Каждый процессор выполняет:
+  schema validation, idempotency check,
+  retry with backoff и DLQ fallback.
+end note
+
+== Ingestion and persistence ==
+TG -> COL : new posts (MTProto)
+COL -> BR : JSONL batch
+BR -> T_RAW : publish raw_message events
+
+T_RAW -> MP : consume(event_id)
+MP -> PG : upsert raw_messages\n+ processed_events
+MP -> T_PER : publish persisted.messages
+
+== Preprocessing ==
+T_RAW -> PP : consume raw events
+T_PER -> PP : consume persisted events
+PP -> PG : write preprocessed_messages
+PP -> T_PRE : publish preprocessed.messages
+
+== Parallel enrichment ==
+par Sentiment branch
+  T_PRE -> SA : consume preprocessed
+  SA -> PG : write sentiment_results
+  SA -> T_SEN : publish sentiment.enriched
+else NER branch
+  T_PRE -> NE : consume preprocessed
+  NE -> PG : write ner_results + entity_relations
+  NE -> T_NER : publish ner.enriched
+else Topic branch
+  T_PRE -> TC : consume preprocessed
+  TC -> PG : write cluster_results + cluster_runs
+  TC -> T_ASSIGN : publish topic.assignments
+end
+
+== Novelty and model lifecycle ==
+T_ASSIGN -> ND : detect novelty/drift
+ND -> T_NOV : publish novelty candidates
+T_NOV -> ALS : prioritize samples
+ALS -> T_TASK : create labeling tasks
+T_TASK -> AG : send tasks for review
+AG -> T_LABEL : publish validated labels
+
+T_LABEL -> DBLD : build dataset version
+DBLD -> T_JOB : publish training job
+T_JOB -> TORCH : schedule launch
+TORCH -> MTR : start retraining run
+MTR -> T_RES : publish training results
+T_RES -> MEV : run quality gates
+MEV -> MREG : register candidate model
+MREG -> MDEP : promote champion model
+MDEP -> TC : deploy model_version\n(hot reload/canary)
+
+== Graph projection ==
+T_SEN -> GB : consume sentiment
+T_NER -> GB : consume NER
+GB -> T_GRAPH : publish graph updates
+T_GRAPH -> NW : consume graph updates
+NW -> NEO : MERGE nodes/relations
+
+== API and UI ==
+API -> PG : SQL analytics queries
+API -> NEO : graph queries
+FE -> AUTH : login / refresh / profile
+FE -> API : dashboards, topics,\nentities, graph
+API --> FE : aggregated analytics response
+
+@enduml
