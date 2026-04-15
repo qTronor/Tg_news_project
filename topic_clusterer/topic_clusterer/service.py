@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 import sqlite3
@@ -68,6 +68,79 @@ SET status = $2::varchar,
         ELSE processing_completed_at
     END
 WHERE event_id = $1;
+"""
+
+SELECT_RAW_MESSAGE_DATE_SQL = """
+SELECT message_date FROM raw_messages
+WHERE channel = $1 AND message_id = $2;
+"""
+
+INSERT_CLUSTER_RUN_PG_SQL = """
+INSERT INTO cluster_runs_pg (
+    run_id,
+    run_timestamp,
+    algo_version,
+    window_start,
+    window_end,
+    total_messages,
+    total_clustered,
+    total_noise,
+    n_clusters,
+    config_json,
+    duration_seconds
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
+ON CONFLICT (run_id) DO UPDATE
+SET run_timestamp = EXCLUDED.run_timestamp,
+    algo_version = EXCLUDED.algo_version,
+    window_start = EXCLUDED.window_start,
+    window_end = EXCLUDED.window_end,
+    total_messages = EXCLUDED.total_messages,
+    total_clustered = EXCLUDED.total_clustered,
+    total_noise = EXCLUDED.total_noise,
+    n_clusters = EXCLUDED.n_clusters,
+    config_json = EXCLUDED.config_json,
+    duration_seconds = EXCLUDED.duration_seconds;
+"""
+
+SELECT_CLUSTER_ASSIGNMENT_REFS_SQL = """
+SELECT
+    rm.event_id,
+    rm.id AS raw_message_id,
+    pm.id AS preprocessed_message_id,
+    rm.message_date
+FROM raw_messages rm
+LEFT JOIN preprocessed_messages pm ON pm.event_id = rm.event_id
+WHERE rm.event_id = ANY($1::varchar[]);
+"""
+
+INSERT_CLUSTER_ASSIGNMENT_PG_SQL = """
+INSERT INTO cluster_assignments (
+    run_id,
+    cluster_id,
+    event_id,
+    channel,
+    message_id,
+    raw_message_id,
+    preprocessed_message_id,
+    cluster_probability,
+    bucket_id,
+    window_start,
+    window_end,
+    message_date
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+ON CONFLICT (run_id, event_id) DO UPDATE
+SET cluster_id = EXCLUDED.cluster_id,
+    channel = EXCLUDED.channel,
+    message_id = EXCLUDED.message_id,
+    raw_message_id = COALESCE(EXCLUDED.raw_message_id, cluster_assignments.raw_message_id),
+    preprocessed_message_id = COALESCE(EXCLUDED.preprocessed_message_id, cluster_assignments.preprocessed_message_id),
+    cluster_probability = EXCLUDED.cluster_probability,
+    bucket_id = EXCLUDED.bucket_id,
+    window_start = EXCLUDED.window_start,
+    window_end = EXCLUDED.window_end,
+    message_date = COALESCE(EXCLUDED.message_date, cluster_assignments.message_date);
 """
 
 SQLITE_INIT_SQL = """
@@ -156,6 +229,22 @@ class HealthState:
     last_error: Optional[str] = None
 
 
+@dataclass
+class ClusteringRunBatch:
+    run_id: str
+    run_timestamp: datetime
+    algo_version: str
+    window_start: Optional[datetime]
+    window_end: Optional[datetime]
+    total_messages: int
+    total_clustered: int
+    total_noise: int
+    n_clusters: int
+    config_json: dict[str, Any]
+    duration_seconds: float
+    assignments: list[dict[str, Any]]
+
+
 class TopicClustererService:
     def __init__(self, config: AppConfig) -> None:
         self._config = config
@@ -240,7 +329,7 @@ class TopicClustererService:
     def _start_embeddings_db(self) -> None:
         db_path = Path(self._config.storage.db_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(str(db_path))
+        self._db = sqlite3.connect(str(db_path), check_same_thread=False)
         for statement in SQLITE_INIT_SQL.strip().split(";"):
             statement = statement.strip()
             if statement:
@@ -478,6 +567,7 @@ class TopicClustererService:
         if self._pool is None or self._db is None:
             raise RuntimeError("service not initialized")
 
+        message_date_dt: Optional[datetime] = None
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 should_process = await self._begin_processing(conn, context)
@@ -485,6 +575,11 @@ class TopicClustererService:
                     logger.info("duplicate event_id=%s", context.event_id)
                     MESSAGES_PROCESSED.labels(status="duplicate").inc()
                     return ProcessingOutcome.DUPLICATE
+                message_date_dt = await conn.fetchval(
+                    SELECT_RAW_MESSAGE_DATE_SQL,
+                    context.channel,
+                    context.message_id,
+                )
 
         text = context.original_text
         if not text or not text.strip():
@@ -509,7 +604,7 @@ class TopicClustererService:
                 context.message_id,
                 text[:2000],
                 json.dumps(embedding.tolist()),
-                context.event_timestamp_dt.isoformat(),
+                (message_date_dt or context.event_timestamp_dt).isoformat(),
             ],
         )
         self._db.commit()
@@ -556,18 +651,21 @@ class TopicClustererService:
                 await asyncio.sleep(interval)
                 if self._stop_event.is_set():
                     break
-                await asyncio.get_event_loop().run_in_executor(
-                    None, self._run_clustering
-                )
+                loop = asyncio.get_running_loop()
+                batch = await loop.run_in_executor(None, self._build_clustering_run)
+                if batch is None:
+                    continue
+                await self._persist_clustering_run_pg(batch)
+                await loop.run_in_executor(None, self._record_clustering_run_sqlite, batch)
             except asyncio.CancelledError:
                 break
             except Exception:  # noqa: BLE001 - scheduler must not crash
                 logger.exception("clustering run failed")
                 CLUSTERING_RUNS.labels(status="error").inc()
 
-    def _run_clustering(self) -> None:
+    def _build_clustering_run(self) -> Optional[ClusteringRunBatch]:
         if self._db is None:
-            return
+            return None
 
         rows = self._db.execute(
             "SELECT event_id, channel, message_id, text, embedding, event_timestamp "
@@ -581,7 +679,7 @@ class TopicClustererService:
                 len(rows),
                 self._config.clustering.min_cluster_size,
             )
-            return
+            return None
 
         logger.info("starting clustering run messages=%s", len(rows))
         start_time = time.monotonic()
@@ -589,14 +687,17 @@ class TopicClustererService:
         event_ids = [r[0] for r in rows]
         channels = [r[1] for r in rows]
         message_ids = [r[2] for r in rows]
-        timestamps = [r[5] for r in rows]  # event_timestamp (ISO string)
+        raw_timestamps = [r[5] for r in rows]
+        timestamps = [
+            parse_iso_datetime(ts) if isinstance(ts, str) else ts
+            for ts in raw_timestamps
+        ]
         embeddings = np.array(
             [json.loads(r[4] or "[]") for r in rows], dtype=np.float32
         )
 
         window_hours = self._config.clustering.window_hours
         bucket_ids = self._make_time_buckets(timestamps, window_hours)
-
         labels, probs = self._cluster_by_bucket(embeddings, bucket_ids)
 
         now_dt = datetime.now(timezone.utc)
@@ -607,77 +708,168 @@ class TopicClustererService:
         n_clusters = len(set(labels)) - (1 if -1 in set(labels) else 0)
         n_clustered = int((labels >= 0).sum())
         n_noise = int((labels == -1).sum())
+        window_start = min(timestamps) if timestamps else None
+        window_end = max(timestamps) if timestamps else None
+        config_json = {
+            "min_cluster_size": self._config.clustering.min_cluster_size,
+            "min_samples": self._config.clustering.min_samples,
+            "n_neighbors": self._config.clustering.n_neighbors,
+            "min_dist": self._config.clustering.min_dist,
+            "window_hours": window_hours,
+        }
 
-        def _ts(val):
-            if val is None:
-                return None
-            return val.isoformat() if hasattr(val, "isoformat") else str(val)
+        assignments: list[dict[str, Any]] = []
+        for i, event_id in enumerate(event_ids):
+            assignments.append(
+                {
+                    "event_id": event_id,
+                    "channel": channels[i],
+                    "message_id": message_ids[i],
+                    "cluster_id": int(labels[i]),
+                    "cluster_probability": float(probs[i]),
+                    "bucket_id": bucket_ids[i],
+                    "message_date": timestamps[i],
+                }
+            )
+
+        return ClusteringRunBatch(
+            run_id=run_id,
+            run_timestamp=now_dt,
+            algo_version=algo_version,
+            window_start=window_start,
+            window_end=window_end,
+            total_messages=len(rows),
+            total_clustered=n_clustered,
+            total_noise=n_noise,
+            n_clusters=n_clusters,
+            config_json=config_json,
+            duration_seconds=duration,
+            assignments=assignments,
+        )
+
+    async def _persist_clustering_run_pg(self, batch: ClusteringRunBatch) -> None:
+        if self._pool is None:
+            raise RuntimeError("postgres pool not initialized")
+
+        event_ids = [assignment["event_id"] for assignment in batch.assignments]
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    INSERT_CLUSTER_RUN_PG_SQL,
+                    batch.run_id,
+                    batch.run_timestamp,
+                    batch.algo_version,
+                    batch.window_start,
+                    batch.window_end,
+                    batch.total_messages,
+                    batch.total_clustered,
+                    batch.total_noise,
+                    batch.n_clusters,
+                    json.dumps(batch.config_json),
+                    batch.duration_seconds,
+                )
+
+                refs_rows = await conn.fetch(SELECT_CLUSTER_ASSIGNMENT_REFS_SQL, event_ids)
+                refs = {row["event_id"]: row for row in refs_rows}
+
+                await conn.executemany(
+                    INSERT_CLUSTER_ASSIGNMENT_PG_SQL,
+                    [
+                        (
+                            batch.run_id,
+                            assignment["cluster_id"],
+                            assignment["event_id"],
+                            assignment["channel"],
+                            assignment["message_id"],
+                            refs[assignment["event_id"]]["raw_message_id"]
+                            if assignment["event_id"] in refs
+                            else None,
+                            refs[assignment["event_id"]]["preprocessed_message_id"]
+                            if assignment["event_id"] in refs
+                            else None,
+                            assignment["cluster_probability"],
+                            assignment["bucket_id"],
+                            batch.window_start,
+                            batch.window_end,
+                            refs[assignment["event_id"]]["message_date"]
+                            if assignment["event_id"] in refs
+                            else None
+                            or assignment["message_date"],
+                        )
+                        for assignment in batch.assignments
+                    ],
+                )
+
+    def _record_clustering_run_sqlite(self, batch: ClusteringRunBatch) -> None:
+        if self._db is None:
+            return
+
+        def _ts(val: Optional[datetime]) -> Optional[str]:
+            return val.isoformat() if val is not None else None
 
         self._db.execute(
             "INSERT INTO cluster_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
-                run_id,
-                now_dt.isoformat(),
-                algo_version,
-                _ts(min(timestamps)) if timestamps else None,
-                _ts(max(timestamps)) if timestamps else None,
-                len(rows),
-                n_clustered,
-                n_noise,
-                n_clusters,
-                json.dumps({
-                    "min_cluster_size": self._config.clustering.min_cluster_size,
-                    "min_samples": self._config.clustering.min_samples,
-                    "n_neighbors": self._config.clustering.n_neighbors,
-                    "min_dist": self._config.clustering.min_dist,
-                    "window_hours": window_hours,
-                }),
-                duration,
+                batch.run_id,
+                batch.run_timestamp.isoformat(),
+                batch.algo_version,
+                _ts(batch.window_start),
+                _ts(batch.window_end),
+                batch.total_messages,
+                batch.total_clustered,
+                batch.total_noise,
+                batch.n_clusters,
+                json.dumps(batch.config_json),
+                batch.duration_seconds,
             ],
         )
 
-        for i, eid in enumerate(event_ids):
+        for assignment in batch.assignments:
             self._db.execute(
                 "INSERT INTO cluster_results "
                 "(event_id, channel, message_id, cluster_id, cluster_probability, "
                 "bucket_id, run_id, run_timestamp, algo_version, window_start, window_end) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    eid,
-                    channels[i],
-                    message_ids[i],
-                    int(labels[i]),
-                    float(probs[i]),
-                    bucket_ids[i],
-                    run_id,
-                    now_dt.isoformat(),
-                    algo_version,
-                    _ts(min(timestamps)) if timestamps else None,
-                    _ts(max(timestamps)) if timestamps else None,
+                    assignment["event_id"],
+                    assignment["channel"],
+                    assignment["message_id"],
+                    assignment["cluster_id"],
+                    assignment["cluster_probability"],
+                    assignment["bucket_id"],
+                    batch.run_id,
+                    batch.run_timestamp.isoformat(),
+                    batch.algo_version,
+                    _ts(batch.window_start),
+                    _ts(batch.window_end),
                 ],
             )
 
-        placeholders = ",".join("?" * len(event_ids))
+        placeholders = ",".join("?" * len(batch.assignments))
         self._db.execute(
             f"UPDATE message_embeddings SET clustered = 1 WHERE event_id IN ({placeholders})",
-            event_ids,
+            [assignment["event_id"] for assignment in batch.assignments],
         )
         self._db.commit()
+        remaining = self._db.execute(
+            "SELECT count(*) FROM message_embeddings WHERE clustered = 0"
+        ).fetchone()[0]
+        BUFFER_SIZE.set(remaining)
 
-        self._export_parquet(run_id)
+        self._export_parquet(batch.run_id)
 
         CLUSTERING_RUNS.labels(status="success").inc()
-        CLUSTERING_DURATION.observe(duration)
-        CLUSTERS_FOUND.set(n_clusters)
+        CLUSTERING_DURATION.observe(batch.duration_seconds)
+        CLUSTERS_FOUND.set(batch.n_clusters)
         self._health.last_clustering_at = utc_now_iso()
 
         logger.info(
             "clustering complete run_id=%s n_clusters=%s clustered=%s noise=%s duration=%.1fs",
-            run_id,
-            n_clusters,
-            n_clustered,
-            n_noise,
-            duration,
+            batch.run_id,
+            batch.n_clusters,
+            batch.total_clustered,
+            batch.total_noise,
+            batch.duration_seconds,
         )
 
     def _make_time_buckets(

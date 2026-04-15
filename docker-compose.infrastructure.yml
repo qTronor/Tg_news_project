@@ -179,6 +179,34 @@ services:
       - telegram-news-network
 
   # =====================================================
+  # Analytics API - PostgreSQL-backed read API for frontend
+  # =====================================================
+  analytics-api:
+    build: ./analytics_api
+    container_name: telegram-news-analytics-api
+    ports:
+      - "${ANALYTICS_PORT:-8020}:8020"
+      - "8021:8021"
+    environment:
+      ANALYTICS_API__POSTGRES__HOST: postgres
+      ANALYTICS_API__POSTGRES__PORT: 5432
+      ANALYTICS_API__POSTGRES__DATABASE: ${DB_NAME:-telegram_news}
+      ANALYTICS_API__POSTGRES__USER: ${DB_USER:-postgres}
+      ANALYTICS_API__POSTGRES__PASSWORD: ${DB_PASSWORD:?Database password required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8020/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+  # =====================================================
   # Auth Service - User Authentication & Authorization
   # =====================================================
   auth-service:
@@ -201,6 +229,34 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8030/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+  # =====================================================
+  # Source Resolver - first source and propagation materialization
+  # =====================================================
+  source-resolver:
+    build: ./source_resolver
+    container_name: telegram-news-source-resolver
+    ports:
+      - "8040:8040"
+      - "8041:8041"
+    environment:
+      SOURCE_RESOLVER__POSTGRES__HOST: postgres
+      SOURCE_RESOLVER__POSTGRES__PORT: 5432
+      SOURCE_RESOLVER__POSTGRES__DATABASE: ${DB_NAME:-telegram_news}
+      SOURCE_RESOLVER__POSTGRES__USER: ${DB_USER:-postgres}
+      SOURCE_RESOLVER__POSTGRES__PASSWORD: ${DB_PASSWORD:?Database password required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8040/health')"]
       interval: 15s
       timeout: 5s
       retries: 5

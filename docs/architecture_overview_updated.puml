@@ -1,0 +1,133 @@
+@startuml
+title Telegram News Pipeline — Updated Architecture Overview
+
+skinparam shadowing false
+skinparam defaultTextAlignment center
+skinparam rectangleRoundCorner 8
+skinparam PackageBorderColor #999
+skinparam PackageBackgroundColor #FAFAFA
+skinparam ArrowColor #444
+
+cloud "Telegram" as tg
+actor "User" as user
+node "SMTP" as smtp
+
+rectangle "**Presentation Layer**" #E3F2FD {
+  rectangle "Frontend :3000\nNext.js 16 · React 19" as fe
+}
+
+rectangle "**API Layer**" #E8F5E9 {
+  rectangle "Analytics API :8020\naiohttp" as ana
+  rectangle "Auth Service :8030\nFastAPI" as auth
+}
+
+rectangle "**Ingestion**" #FFF3E0 {
+  rectangle "Collector\nTelethon" as collector
+  rectangle "Kafka Bridge" as bridge
+}
+
+rectangle "**Message Bus**" #EAF2FF {
+  rectangle "Apache Kafka\nraw → persisted → preprocessed\n→ sentiment/ner/topic.assignments\n→ novelty/training → graph.updates" as kafka
+}
+
+rectangle "**Processing Layer**" #F3E5F5 {
+  rectangle "message_persister" as mp
+  rectangle "preprocessor" as pp
+  rectangle "sentiment_analyzer" as sa
+  rectangle "ner_extractor" as ne
+  rectangle "topic_clusterer" as tc
+  rectangle "topic_novelty_detector" as nd
+  rectangle "graph-builder" as gb
+  rectangle "neo4j-writer" as nw
+}
+
+rectangle "**Model Lifecycle Layer**" #FCE4EC {
+  rectangle "active_learning_sampler" as als
+  rectangle "annotation_gateway" as ag
+  rectangle "dataset_builder" as ds
+  rectangle "training_orchestrator" as orch
+  rectangle "model_trainer" as mt
+  rectangle "model_evaluator" as me
+  rectangle "model_registry" as mr
+  rectangle "model_deployer" as md
+}
+
+rectangle "**Storage Layer**" #FFF7E6 {
+  database "PostgreSQL\ntelegram_news" as pg
+  database "Neo4j" as neo4j
+  database "PostgreSQL\ntg_news_auth" as pg_auth
+  database "Redis" as redis
+  database "Object Storage\n(MinIO/S3)" as obj
+}
+
+rectangle "**Monitoring**" #EFEBE9 {
+  rectangle "Prometheus · Grafana\nKafka UI · Neo4j Browser" as mon
+}
+
+user --> fe
+fe --> ana
+fe --> auth
+
+auth --> pg_auth
+auth --> redis
+auth --> smtp
+
+ana --> pg
+ana --> neo4j
+
+tg --> collector
+collector --> bridge
+bridge --> kafka
+
+kafka --> mp
+kafka --> pp
+mp --> pg
+pp --> pg
+mp --> kafka
+pp --> kafka
+
+kafka --> sa
+kafka --> ne
+kafka --> tc
+sa --> pg
+ne --> pg
+tc --> pg
+sa --> kafka
+ne --> kafka
+tc --> kafka
+
+kafka --> nd
+nd --> kafka
+kafka --> als
+als --> kafka
+kafka --> ag
+ag --> kafka
+kafka --> ds
+ds --> obj
+ds --> kafka
+kafka --> orch
+orch --> mt
+mt --> obj
+mt --> kafka
+kafka --> me
+me --> mr
+mr --> md
+md --> tc
+
+kafka --> gb
+gb --> kafka
+kafka --> nw
+nw --> neo4j
+
+mp ..> mon
+pp ..> mon
+sa ..> mon
+ne ..> mon
+tc ..> mon
+nd ..> mon
+gb ..> mon
+nw ..> mon
+mt ..> mon
+me ..> mon
+
+@enduml

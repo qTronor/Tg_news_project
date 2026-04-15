@@ -1,0 +1,115 @@
+@startuml
+title Telegram News Pipeline — Topic Model Retraining Loop
+
+skinparam shadowing false
+skinparam defaultTextAlignment center
+skinparam wrapWidth 220
+skinparam rectangleRoundCorner 8
+skinparam PackageBorderColor #999
+skinparam PackageBackgroundColor #FAFAFA
+
+skinparam component {
+  BackgroundColor #F7F7F7
+  BorderColor #333333
+}
+
+skinparam database {
+  BackgroundColor #FFF7E6
+  BorderColor #8A5A00
+}
+
+skinparam queue {
+  BackgroundColor #EAF2FF
+  BorderColor #1B4F99
+}
+
+legend left
+  == Tags ==
+  <<existing>>  — already in current architecture
+  <<new>>       — proposed for continual learning
+endlegend
+
+package "Core Pipeline" {
+  component "preprocessor" as pp <<existing>>
+  component "topic_clusterer\n(inference + novelty_score)" as tc <<existing>>
+  component "Analytics API" as ana <<existing>>
+}
+
+package "Kafka Topics" {
+  queue "preprocessed.messages" as t_pre <<existing>>
+  queue "topic.assignments" as t_assign <<new>>
+  queue "topic.novelty.candidates" as t_novel <<new>>
+  queue "topic.labeling.tasks" as t_tasks <<new>>
+  queue "topic.labels" as t_labels <<new>>
+  queue "ml.training.jobs" as t_jobs <<new>>
+  queue "ml.training.results" as t_results <<new>>
+  queue "ml.model.deployments" as t_deploy <<new>>
+}
+
+package "Continual Learning Services" {
+  component "topic_novelty_detector" as novelty <<new>>
+  component "active_learning_sampler" as sampler <<new>>
+  component "annotation_gateway\n(API + reviewer UI)" as annotator <<new>>
+  component "dataset_builder" as ds <<new>>
+  component "training_orchestrator" as orch <<new>>
+  component "model_trainer" as trainer <<new>>
+  component "model_evaluator" as eval <<new>>
+  component "model_registry" as registry <<new>>
+  component "model_deployer\n(canary + rollback)" as deployer <<new>>
+}
+
+package "Storage" {
+  database "PostgreSQL\ntelegram_news\n(topic labels, model reports)" as pg <<existing>>
+  database "Object Storage\n(MinIO/S3)\n(dataset + model artifacts)" as obj <<new>>
+}
+
+actor "Annotator" as human
+
+t_pre --> tc : consume
+tc --> t_assign : publish topic_id,\nconfidence,\nnovelty_score,\nmodel_version
+t_assign --> ana : analytics
+
+t_assign --> novelty : detect OOD/drift
+novelty --> t_novel : publish candidates
+t_novel --> sampler : prioritize samples
+sampler --> t_tasks : create labeling tasks
+
+t_tasks --> annotator : serve tasks
+human --> annotator : label/merge/split topics
+annotator --> t_labels : publish labels
+annotator --> pg : audit + task state
+
+t_labels --> ds : build versioned dataset
+ds --> pg : dataset metadata
+ds --> obj : parquet/csv snapshot
+ds --> t_jobs : training request
+
+t_jobs --> orch : schedule / deduplicate
+orch --> trainer : run spec
+trainer --> obj : save model artifact
+trainer --> t_results : training metrics
+
+t_results --> eval : quality gates
+eval --> pg : eval report
+eval --> registry : register candidate
+registry --> pg : model lineage
+registry --> obj : model manifest
+
+registry --> deployer : promote champion
+deployer --> t_deploy : rollout event
+t_deploy --> tc : hot reload model
+
+note bottom of tc
+  Runtime contract:
+  - include model_version in topic.assignments
+  - keep backward compatibility for replay
+end note
+
+note right of eval
+  Gates example:
+  - macro F1 >= baseline
+  - unknown-topic recall >= threshold
+  - no regression on top channels
+end note
+
+@enduml

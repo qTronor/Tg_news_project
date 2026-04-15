@@ -1,139 +1,75 @@
 @startuml
-title Telegram News Pipeline — Architecture (repo view)
+title Telegram News Pipeline — Concept Component Diagram
+
+left to right direction
 
 skinparam shadowing false
-skinparam componentStyle rectangle
-skinparam wrapWidth 260
-skinparam maxMessageSize 160
-skinparam defaultTextAlignment left
-
+skinparam componentStyle uml2
+skinparam defaultTextAlignment center
+skinparam wrapWidth 160
+skinparam linetype ortho
+skinparam nodesep 60
+skinparam ranksep 70
 skinparam component {
   BackgroundColor #F7F7F7
   BorderColor #333333
 }
-
 skinparam database {
   BackgroundColor #FFF7E6
   BorderColor #8A5A00
 }
 
-skinparam queue {
-  BackgroundColor #EAF2FF
-  BorderColor #1B4F99
+actor "Пользователь" as user
+cloud "Внешние источники\nконтента" as source
+
+component [Клиентское\nприложение] as ui
+
+package "Платформа обработки" {
+  component [API и управление\nдоступом] as api
+  component [Контур сбора и\nподготовки данных] as ingestion
+  component [Контур аналитики\nAI/NLP] as analytics
+  component [Контур графовой\nаналитики] as graph
+  component [Контур дообучения\nмоделей] as mlops
 }
 
-skinparam note {
-  BackgroundColor #FFFDE7
-  BorderColor #9E9E9E
+package "Платформенные ресурсы" {
+  component [Событийная\nшина] as bus
+  database [Хранилища\nданных] as storage
+  component [Мониторинг и\nадминистрирование] as observability
 }
 
-legend left
-  == Stereotypes ==
-  <<implemented>>  — already in codebase
-  <<planned>>      — described in contracts, not implemented here
-endlegend
+interface "IClient" as i_client
+interface "IDataAccess" as i_data
+interface "IEventStream" as i_events
+interface "IModelLifecycle" as i_model
+interface "IMetrics" as i_metrics
 
-actor "Telegram\n(public channels)" as telegram
+user --> ui : работа в UI
+source --> ingestion : поток контента
 
-package "Ingestion" {
-  component "rbc_telegram_collector\n(telethon MTProto)\nwrites JSONL/CSV\noptional RabbitMQ sink" as collector <<implemented>>
-  artifact "JSONL files\nrbc_telegram_collector/data/*.jsonl" as jsonl <<implemented>>
-  component "JSONL → Kafka bridge\nscripts/e2e_run.ps1" as jsonl_bridge <<implemented>>
-}
+ui --( i_client : клиентский доступ
+api - i_client : предоставляет API
 
-package "Event Bus (Kafka)" {
-  queue "raw.telegram.messages" as t_raw
-  queue "persisted.messages" as t_persisted
-  queue "preprocessed.messages" as t_preprocessed
+api --( i_data : чтение/запись
+storage - i_data : доступ к данным
 
-  queue "sentiment.enriched" as t_sentiment <<planned>>
-  queue "ner.enriched" as t_ner <<planned>>
-  queue "graph.updates" as t_graph <<planned>>
+ingestion --( i_events : публикация событий
+analytics --( i_events : потребление/публикация
+graph --( i_events : потребление/публикация
+mlops --( i_events : триггеры обучения
+bus - i_events : event backbone
 
-  queue "dlq.raw.messages" as dlq_raw
-  queue "dlq.preprocessing" as dlq_preproc
-  queue "dlq.sentiment" as dlq_sent <<planned>>
-  queue "dlq.ner" as dlq_ner <<planned>>
-  queue "dlq.graph" as dlq_graph <<planned>>
-}
+analytics --> storage : результаты анализа
+graph --> storage : графовые данные
 
-package "Processors" {
-  component "message_persister\nConsumes raw.telegram.messages\nValidates schema\nWrites raw_messages + processed_events\nPublishes persisted.messages\nHTTP: /health, /metrics" as persister <<implemented>>
+mlops --( i_model : версии моделей
+analytics - i_model : inference по версии
 
-  component "preprocessor\nConsumes raw.telegram.messages + persisted.messages\nResolves raw_message in Postgres\nWrites preprocessed_messages + processed_events\nPublishes preprocessed.messages\nHTTP: /healthz, /metrics" as preprocessor <<implemented>>
-
-  component "sentiment-analyzer\n(preprocessed → sentiment.enriched)" as sentiment <<planned>>
-  component "ner-extractor\n(preprocessed → ner.enriched)" as ner <<planned>>
-  component "graph-builder\n(sentiment + ner → graph.updates)" as graph_builder <<planned>>
-  component "neo4j-writer\n(graph.updates → Neo4j)" as neo4j_writer <<planned>>
-}
-
-package "Storage" {
-  database "PostgreSQL\nmigrations/001_initial_schema.sql\nTables: raw_messages,\npreprocessed_messages,\nprocessed_events, outbox, ..." as pg
-  database "Neo4j\nneo4j/init.cypher\nLabels: Message, Entity,\nChannel, Topic" as neo4j
-  database "Redis\n(cache/dedup)\nInfra available" as redis
-}
-
-package "Observability" {
-  component "Prometheus\n(optional profile)\nscrapes /metrics" as prom
-  component "Grafana\n(optional profile)" as grafana
-  component "Kafka UI\nWeb UI" as kafka_ui
-  component "Neo4j Browser\nWeb UI" as neo4j_browser
-}
-
-telegram --> collector : fetch posts
-collector --> jsonl : write
-jsonl --> jsonl_bridge : read
-jsonl_bridge --> t_raw : produce
-
-t_raw --> persister : consume
-persister --> pg : INSERT raw_messages\nUPSERT processed_events
-persister --> t_persisted : produce
-persister --> dlq_raw : produce on error
-
-t_raw --> preprocessor : consume
-t_persisted --> preprocessor : consume (coordination)
-preprocessor --> pg : SELECT raw_messages\nINSERT preprocessed_messages\nUPSERT processed_events
-preprocessor --> t_preprocessed : produce
-preprocessor --> dlq_preproc : produce on error
-
-' Planned chain
-t_preprocessed --> sentiment : consume
-sentiment --> t_sentiment : produce
-sentiment --> dlq_sent : produce on error
-
-t_preprocessed --> ner : consume
-ner --> t_ner : produce
-ner --> dlq_ner : produce on error
-
-t_sentiment --> graph_builder : consume
-t_ner --> graph_builder : consume
-graph_builder --> t_graph : produce
-graph_builder --> dlq_graph : produce on error
-
-t_graph --> neo4j_writer : consume
-neo4j_writer --> neo4j : MERGE nodes/relationships
-
-persister --> prom : expose metrics
-preprocessor --> prom : expose metrics
-prom --> grafana
-
-kafka_ui ..> t_raw
-kafka_ui ..> t_preprocessed
-neo4j_browser ..> neo4j
-
-note right of jsonl_bridge
-  Collector currently writes JSONL locally.
-  For E2E the repo provides a bridge that
-  publishes JSONL lines to Kafka topic
-  raw.telegram.messages with key=event_id.
-end note
-
-note bottom of pg
-  Idempotency:
-  - natural key: {channel}:{message_id}
-  - service-level dedup via processed_events
-  - domain tables protected by UNIQUE constraints
-end note
+api --> observability : аудит и метрики
+observability - i_metrics
+ingestion --( i_metrics : pipeline метрики
+analytics --( i_metrics : quality/latency
+graph --( i_metrics : graph метрики
+mlops --( i_metrics : ML quality
 
 @enduml

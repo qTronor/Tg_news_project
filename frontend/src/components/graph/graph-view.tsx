@@ -7,6 +7,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { entityTypeColor } from "@/lib/utils";
+import { SourceStatusBadge } from "@/components/topics/source-status-badge";
+import type { SourceStatus } from "@/types";
 
 interface Props {
   data: GraphData;
@@ -18,6 +20,7 @@ function nodeColor(type: string): string {
   switch (type) {
     case "topic": return "#3b82f6";
     case "channel": return "#22c55e";
+    case "message": return "#f59e0b";
     case "entity_per": return "#f97316";
     case "entity_org": return "#8b5cf6";
     case "entity_loc": return "#ef4444";
@@ -29,7 +32,21 @@ function nodeShape(type: string): string {
   switch (type) {
     case "topic": return "round-diamond";
     case "channel": return "round-hexagon";
+    case "message": return "round-rectangle";
     default: return "ellipse";
+  }
+}
+
+function sourceStatusColor(status?: SourceStatus): string | null {
+  switch (status) {
+    case "exact":
+      return "#15803d";
+    case "probable":
+      return "#d97706";
+    case "unknown":
+      return "#64748b";
+    default:
+      return null;
   }
 }
 
@@ -50,6 +67,10 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
           nodeType: n.type,
           weight: n.weight,
           community: n.community,
+          channel: n.channel,
+          messageId: n.message_id,
+          messageDate: n.message_date,
+          sourceStatus: n.source_status,
         },
       })),
       ...data.edges
@@ -85,7 +106,8 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
             width: (ele: cytoscape.NodeSingular) => Math.max(20, Math.min(60, Math.sqrt(ele.data("weight")) * 2)),
             height: (ele: cytoscape.NodeSingular) => Math.max(20, Math.min(60, Math.sqrt(ele.data("weight")) * 2)),
             "border-width": 2,
-            "border-color": (ele: cytoscape.NodeSingular) => nodeColor(ele.data("nodeType")),
+            "border-color": (ele: cytoscape.NodeSingular) =>
+              sourceStatusColor(ele.data("sourceStatus")) || nodeColor(ele.data("nodeType")),
             "border-opacity": 0.3,
             "background-opacity": 0.85,
             "overlay-opacity": 0,
@@ -109,7 +131,8 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
             "line-opacity": 0.4,
             "curve-style": "bezier",
             "target-arrow-shape": "triangle",
-            "target-arrow-color": "#475569",
+            "target-arrow-color": (ele: cytoscape.EdgeSingular) =>
+              ele.data("edgeType")?.includes("propagates") ? "#f59e0b" : "#475569",
             "arrow-scale": 0.6,
             "overlay-opacity": 0,
             "transition-property": "line-color, line-opacity, width",
@@ -160,6 +183,10 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
         type: node.data("nodeType"),
         weight: node.data("weight"),
         community: node.data("community"),
+        channel: node.data("channel"),
+        message_id: node.data("messageId"),
+        message_date: node.data("messageDate"),
+        source_status: node.data("sourceStatus"),
       };
       setSelectedNode(nodeData);
       onNodeClick?.(nodeData);
@@ -197,6 +224,10 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
             type: focusNode.data("nodeType"),
             weight: focusNode.data("weight"),
             community: focusNode.data("community"),
+            channel: focusNode.data("channel"),
+            message_id: focusNode.data("messageId"),
+            message_date: focusNode.data("messageDate"),
+            source_status: focusNode.data("sourceStatus"),
           });
         }, 1000);
       }
@@ -216,9 +247,13 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
         {[
           { label: "Topic", color: "#3b82f6" },
           { label: "Channel", color: "#22c55e" },
+          { label: "Message", color: "#f59e0b" },
           { label: "PER", color: "#f97316" },
           { label: "ORG", color: "#8b5cf6" },
           { label: "LOC", color: "#ef4444" },
+          { label: "Exact", color: "#15803d" },
+          { label: "Probable", color: "#d97706" },
+          { label: "Unknown", color: "#64748b" },
         ].map(item => (
           <div key={item.label} className="flex items-center gap-1.5 bg-card/80 backdrop-blur-sm rounded-full px-2.5 py-1 text-xs text-foreground border border-border">
             <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }} />
@@ -241,6 +276,11 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
                 <Badge variant="entity" color={nodeColor(selectedNode.type)}>
                   {selectedNode.type}
                 </Badge>
+                {selectedNode.source_status && (
+                  <div className="mt-2">
+                    <SourceStatusBadge status={selectedNode.source_status} />
+                  </div>
+                )}
                 <h3 className="text-sm font-semibold text-foreground mt-2">{selectedNode.label}</h3>
               </div>
               <button onClick={() => setSelectedNode(null)} className="text-muted-foreground hover:text-foreground transition-colors">
@@ -256,6 +296,24 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
                 <div className="flex justify-between">
                   <span>Community</span>
                   <span className="text-foreground font-medium">#{selectedNode.community}</span>
+                </div>
+              )}
+              {"channel" in selectedNode && selectedNode.channel && (
+                <div className="flex justify-between">
+                  <span>Channel</span>
+                  <span className="text-foreground font-medium">{selectedNode.channel}</span>
+                </div>
+              )}
+              {"message_id" in selectedNode && selectedNode.message_id !== undefined && (
+                <div className="flex justify-between">
+                  <span>Message</span>
+                  <span className="text-foreground font-medium">#{selectedNode.message_id}</span>
+                </div>
+              )}
+              {"source_status" in selectedNode && selectedNode.source_status && (
+                <div className="flex justify-between">
+                  <span>Source</span>
+                  <span className="text-foreground font-medium capitalize">{selectedNode.source_status}</span>
                 </div>
               )}
             </div>

@@ -1,233 +1,440 @@
 import type {
+  ClusterId,
+  Entity,
+  FirstSourcePayload,
+  GraphData,
+  Message,
   OverviewStats,
+  SentimentPoint,
   Topic,
   TopicDetail,
-  Message,
-  Entity,
-  SentimentPoint,
-  GraphData,
 } from "@/types";
 
 const NOW = new Date();
-function hoursAgo(h: number) {
-  return new Date(NOW.getTime() - h * 3600_000).toISOString();
+
+function hoursAgo(hours: number) {
+  return new Date(NOW.getTime() - hours * 3_600_000).toISOString();
 }
 
-export const mockOverview: OverviewStats = {
-  total_messages: 12847,
-  messages_change_pct: 14.3,
-  new_topics: 7,
-  topics_change: 3,
-  active_channels: 42,
-  avg_sentiment: -0.08,
-};
+function clusterId(seed: number): ClusterId {
+  return `demo:${seed}`;
+}
 
-const channels = ["РБК", "ТАСС", "Коммерсантъ", "Медуза", "Интерфакс", "Ведомости", "RT", "Известия", "Газета.ру", "РИА Новости"];
+function clusterSeed(value: ClusterId): number {
+  return parseInt(value.split(":").pop() || "0", 10);
+}
 
-function makeMsgs(topic: string, clusterId: number, count: number): Message[] {
-  const texts: Record<string, string[]> = {
-    "Ставка ЦБ": [
-      "ЦБ повысил ключевую ставку до 21% годовых. Набиуллина заявила о необходимости сдерживания инфляции.",
-      "Рынок отреагировал падением после решения Центробанка по ставке. Аналитики ожидали повышение лишь до 20%.",
-      "Набиуллина: «Инфляционные ожидания остаются на повышенном уровне, мы вынуждены действовать решительно».",
-      "Эксперты прогнозируют замедление ипотечного кредитования после очередного повышения ключевой ставки.",
-      "Минфин: повышение ставки ЦБ не повлияет на планы по размещению ОФЗ в текущем квартале.",
-    ],
-    "Выборы в Германии": [
-      "На выборах в бундестаг лидирует ХДС/ХСС. Шольц признал поражение СДПГ.",
-      "Новый канцлер Германии обещает пересмотр энергетической политики и отношений с Россией.",
-      "Результаты выборов в Германии могут повлиять на санкционную политику ЕС.",
-      "АдГ получила рекордное количество мест в бундестаге, эксперты говорят о росте правого популизма.",
-    ],
-    "Нефть ОПЕК+": [
-      "Страны ОПЕК+ договорились о сокращении добычи нефти на 1 млн баррелей в сутки.",
-      "Цена нефти Brent превысила $85 за баррель на фоне решения ОПЕК+.",
-      "Аналитики Goldman Sachs повысили прогноз цены на нефть до $90 к концу года.",
-    ],
-    "ИИ-регулирование": [
-      "ЕС утвердил AI Act — первый в мире всеобъемлющий закон о регулировании ИИ.",
-      "OpenAI и Google выступили с совместным заявлением о необходимости саморегулирования отрасли ИИ.",
-      "Россия разрабатывает собственный закон о регулировании генеративного ИИ по аналогии с AI Act.",
-    ],
-    "Криптовалюты": [
-      "Bitcoin обновил исторический максимум, преодолев отметку $100,000.",
-      "SEC одобрила ETF на Ethereum, рынок отреагировал ростом на 15%.",
-      "Центробанки БРИКС обсуждают создание единой платформы для расчетов в цифровых валютах.",
-    ],
-    "Климат COP": [
-      "На COP30 достигнуто историческое соглашение о финансировании климатических потерь развивающихся стран.",
-      "Россия взяла на себя обязательство достичь углеродной нейтральности к 2060 году.",
-    ],
+function firstSourceForCluster(id: ClusterId): FirstSourcePayload {
+  const seed = clusterSeed(id);
+  const baseDate = hoursAgo(8 + seed);
+
+  if (seed === 1) {
+    const exact = {
+      resolution_kind: "exact" as const,
+      source_type: "exact_forward" as const,
+      source_confidence: 1,
+      source_event_id: "agency:101",
+      source_channel: "AgencyWire",
+      source_message_id: 101,
+      source_message_date: baseDate,
+      source_snippet: "AgencyWire published the first bulletin before resharing began.",
+      explanation: {
+        summary: "Telegram forward metadata points to a concrete upstream message.",
+      },
+      evidence: {
+        forward_from_channel_id: 1001,
+        forward_from_message_id: 101,
+      },
+    };
+    const inferred = {
+      resolution_kind: "inferred" as const,
+      source_type: "earliest_in_cluster" as const,
+      source_confidence: 0.42,
+      source_event_id: "agency:101",
+      source_channel: "AgencyWire",
+      source_message_id: 101,
+      source_message_date: baseDate,
+      source_snippet: "AgencyWire published the first bulletin before resharing began.",
+      explanation: {
+        summary: "Fallback to earliest cluster message.",
+      },
+      evidence: { fallback: "earliest_in_cluster" },
+    };
+    return {
+      cluster_id: id,
+      source_status: "exact",
+      exact_source: exact,
+      inferred_source: inferred,
+      display_source: exact,
+      propagation_chain: [
+        {
+          child_event_id: "rbc:201",
+          child_channel: "RBC",
+          child_message_id: 201,
+          child_message_date: hoursAgo(6),
+          parent_event_id: "agency:101",
+          parent_channel: "AgencyWire",
+          parent_message_id: 101,
+          parent_message_date: baseDate,
+          link_type: "exact_forward",
+          link_confidence: 1,
+          resolution_kind: "exact",
+          explanation: { summary: "Forward edge" },
+          evidence: { forward_from_message_id: 101 },
+        },
+      ],
+    };
+  }
+
+  if (seed === 2) {
+    const exact = {
+      resolution_kind: "exact" as const,
+      source_type: "unknown" as const,
+      source_confidence: 0,
+      source_event_id: null,
+      source_channel: null,
+      source_message_id: null,
+      source_message_date: null,
+      source_snippet: null,
+      explanation: { summary: "No strict source metadata was found." },
+      evidence: { reason: "unknown" },
+    };
+    const inferred = {
+      resolution_kind: "inferred" as const,
+      source_type: "quoted" as const,
+      source_confidence: 0.77,
+      source_event_id: "desk:302",
+      source_channel: "DeskNews",
+      source_message_id: 302,
+      source_message_date: baseDate,
+      source_snippet: "DeskNews appears to be the earliest quoted formulation of the story.",
+      explanation: {
+        summary: "Quoted fragment and shared entities matched an earlier message.",
+      },
+      evidence: {
+        quoted_fragment_match: true,
+        entity_overlap: 0.66,
+      },
+    };
+    return {
+      cluster_id: id,
+      source_status: "probable",
+      exact_source: exact,
+      inferred_source: inferred,
+      display_source: inferred,
+      propagation_chain: [
+        {
+          child_event_id: "market:401",
+          child_channel: "MarketWatch",
+          child_message_id: 401,
+          child_message_date: hoursAgo(5),
+          parent_event_id: "desk:302",
+          parent_channel: "DeskNews",
+          parent_message_id: 302,
+          parent_message_date: baseDate,
+          link_type: "quoted",
+          link_confidence: 0.77,
+          resolution_kind: "inferred",
+          explanation: { summary: "Quoted propagation edge" },
+          evidence: { quoted_fragment_match: true },
+        },
+      ],
+    };
+  }
+
+  return {
+    cluster_id: id,
+    source_status: "unknown",
+    exact_source: {
+      resolution_kind: "exact",
+      source_type: "unknown",
+      source_confidence: 0,
+      source_event_id: null,
+      source_channel: null,
+      source_message_id: null,
+      source_message_date: null,
+      source_snippet: null,
+      explanation: { summary: "No strict source metadata was found." },
+      evidence: { reason: "unknown" },
+    },
+    inferred_source: {
+      resolution_kind: "inferred",
+      source_type: "unknown",
+      source_confidence: 0,
+      source_event_id: null,
+      source_channel: null,
+      source_message_id: null,
+      source_message_date: null,
+      source_snippet: null,
+      explanation: { summary: "No probable upstream message cleared the threshold." },
+      evidence: { reason: "unknown" },
+    },
+    display_source: null,
+    propagation_chain: [],
   };
-  const topicTexts = texts[topic] || [`Сообщение по теме "${topic}".`];
-  return Array.from({ length: count }, (_, i) => ({
-    event_id: `${channels[i % channels.length].toLowerCase()}:${10000 + clusterId * 100 + i}`,
-    channel: channels[i % channels.length],
-    message_id: 10000 + clusterId * 100 + i,
-    text: topicTexts[i % topicTexts.length],
-    date: hoursAgo(Math.random() * 24),
-    views: Math.floor(Math.random() * 50000) + 1000,
-    forwards: Math.floor(Math.random() * 2000) + 50,
-    topic_label: topic,
-    cluster_id: clusterId,
-    sentiment_score: (Math.random() - 0.5) * 2,
-    sentiment_label: undefined,
-    entities: [
-      { id: `e-${i}-1`, text: topic.split(" ")[0], type: "ORG" as const, mention_count: Math.floor(Math.random() * 500) },
-    ],
+}
+
+function makeMessages(topic: Topic, count: number): Message[] {
+  const seed = clusterSeed(topic.cluster_id);
+  const firstSource = firstSourceForCluster(topic.cluster_id);
+  return Array.from({ length: count }, (_, index) => ({
+    event_id: `${topic.label.toLowerCase().replace(/\s+/g, "-")}:${seed * 100 + index}`,
+    channel: topic.channels[index % topic.channels.length]?.channel || "Channel",
+    message_id: seed * 100 + index,
+    text: `${topic.label} update ${index + 1}: new details continue to propagate across channels.`,
+    date: hoursAgo(seed + index),
+    views: 1_000 + seed * 150 + index * 25,
+    forwards: 50 + seed * 10 + index * 3,
+    topic_label: topic.label,
+    cluster_id: topic.cluster_id,
+    sentiment_score: seed === 1 ? 0.46 : seed === 2 ? -0.18 : 0.04,
+    sentiment_label: seed === 1 ? "Positive" : seed === 2 ? "Negative" : "Neutral",
+    sentiment_confidence: 0.82,
+    source_status: firstSource.source_status,
+    source_type: firstSource.display_source?.source_type || "unknown",
+    source_confidence: firstSource.display_source?.source_confidence || 0,
+    source_event_id: firstSource.display_source?.source_event_id || null,
+    source_channel: firstSource.display_source?.source_channel || null,
+    entities: topic.top_entities.slice(0, 2),
   }));
 }
 
+export const mockOverview: OverviewStats = {
+  total_messages: 12_847,
+  messages_change_pct: 14.3,
+  new_topics: 2,
+  topics_change: 1,
+  active_channels: 18,
+  avg_sentiment: 0.11,
+};
+
 export const mockTopics: Topic[] = [
   {
-    cluster_id: 1, label: "Ставка ЦБ", message_count: 342, channel_count: 12,
-    avg_sentiment: -0.42, is_new: true, first_seen: hoursAgo(8), last_seen: hoursAgo(0.5),
+    cluster_id: clusterId(1),
+    label: "Central Bank Rate",
+    message_count: 342,
+    channel_count: 12,
+    avg_sentiment: 0.46,
     top_entities: [
-      { id: "e1", text: "ЦБ РФ", type: "ORG", mention_count: 287 },
-      { id: "e2", text: "Набиуллина", type: "PER", mention_count: 198 },
-      { id: "e3", text: "Москва", type: "LOC", mention_count: 87 },
+      { id: "ORG:central-bank", text: "Central Bank", type: "ORG", mention_count: 210 },
+      { id: "PER:governor", text: "Governor", type: "PER", mention_count: 128 },
+      { id: "LOC:moscow", text: "Moscow", type: "LOC", mention_count: 87 },
     ],
-    top_keywords: ["ставка", "ЦБ", "инфляция", "процент", "рефинансирование"],
-    sparkline: [2, 5, 12, 28, 45, 62, 54, 41, 33, 27, 19, 14],
-    channels: channels.slice(0, 12).map(c => ({ channel: c, count: Math.floor(Math.random() * 60) + 5 })),
+    top_keywords: ["rate", "inflation", "bank"],
+    is_new: true,
+    first_seen: hoursAgo(10),
+    last_seen: hoursAgo(1),
+    sparkline: [2, 4, 8, 11, 16, 23, 29, 26, 22, 16, 11, 7],
+    channels: [
+      { channel: "RBC", count: 92 },
+      { channel: "AgencyWire", count: 76 },
+      { channel: "MarketWatch", count: 41 },
+    ],
+    source_status: "exact",
   },
   {
-    cluster_id: 2, label: "Выборы в Германии", message_count: 198, channel_count: 8,
-    avg_sentiment: 0.12, is_new: false, first_seen: hoursAgo(48), last_seen: hoursAgo(1),
+    cluster_id: clusterId(2),
+    label: "Election Coalition Talks",
+    message_count: 198,
+    channel_count: 8,
+    avg_sentiment: -0.18,
     top_entities: [
-      { id: "e4", text: "Шольц", type: "PER", mention_count: 134 },
-      { id: "e5", text: "НАТО", type: "ORG", mention_count: 89 },
-      { id: "e6", text: "Берлин", type: "LOC", mention_count: 76 },
+      { id: "PER:chancellor", text: "Chancellor", type: "PER", mention_count: 134 },
+      { id: "ORG:parliament", text: "Parliament", type: "ORG", mention_count: 92 },
+      { id: "LOC:berlin", text: "Berlin", type: "LOC", mention_count: 65 },
     ],
-    top_keywords: ["бундестаг", "ХДС", "выборы", "канцлер", "Германия"],
-    sparkline: [15, 22, 34, 28, 18, 12, 9, 8, 11, 14, 15, 12],
-    channels: channels.slice(0, 8).map(c => ({ channel: c, count: Math.floor(Math.random() * 40) + 3 })),
+    top_keywords: ["election", "coalition", "vote"],
+    is_new: false,
+    first_seen: hoursAgo(30),
+    last_seen: hoursAgo(2),
+    sparkline: [9, 12, 14, 17, 19, 16, 12, 10, 8, 6, 5, 4],
+    channels: [
+      { channel: "DeskNews", count: 71 },
+      { channel: "WorldBrief", count: 53 },
+      { channel: "MarketWatch", count: 29 },
+    ],
+    source_status: "probable",
   },
   {
-    cluster_id: 3, label: "Нефть ОПЕК+", message_count: 156, channel_count: 11,
-    avg_sentiment: -0.10, is_new: false, first_seen: hoursAgo(72), last_seen: hoursAgo(2),
+    cluster_id: clusterId(3),
+    label: "AI Safety Regulation",
+    message_count: 154,
+    channel_count: 6,
+    avg_sentiment: 0.09,
     top_entities: [
-      { id: "e7", text: "ОПЕК", type: "ORG", mention_count: 145 },
-      { id: "e8", text: "Саудовская Аравия", type: "LOC", mention_count: 67 },
+      { id: "ORG:eu", text: "EU", type: "ORG", mention_count: 119 },
+      { id: "ORG:openai", text: "OpenAI", type: "ORG", mention_count: 78 },
+      { id: "LOC:brussels", text: "Brussels", type: "LOC", mention_count: 44 },
     ],
-    top_keywords: ["нефть", "баррель", "добыча", "ОПЕК+", "Brent"],
-    sparkline: [8, 10, 12, 11, 14, 18, 22, 19, 16, 13, 11, 12],
-    channels: channels.slice(0, 11).map(c => ({ channel: c, count: Math.floor(Math.random() * 30) + 2 })),
-  },
-  {
-    cluster_id: 4, label: "ИИ-регулирование", message_count: 134, channel_count: 9,
-    avg_sentiment: 0.24, is_new: true, first_seen: hoursAgo(12), last_seen: hoursAgo(0.2),
-    top_entities: [
-      { id: "e9", text: "OpenAI", type: "ORG", mention_count: 98 },
-      { id: "e10", text: "ЕС", type: "ORG", mention_count: 87 },
+    top_keywords: ["ai", "regulation", "safety"],
+    is_new: true,
+    first_seen: hoursAgo(18),
+    last_seen: hoursAgo(3),
+    sparkline: [0, 2, 5, 7, 12, 18, 24, 21, 18, 14, 10, 6],
+    channels: [
+      { channel: "TechDaily", count: 64 },
+      { channel: "RBC", count: 39 },
+      { channel: "PolicyNow", count: 22 },
     ],
-    top_keywords: ["AI Act", "ИИ", "регулирование", "нейросети", "GPT"],
-    sparkline: [0, 0, 2, 5, 12, 28, 34, 22, 15, 10, 6, 0],
-    channels: channels.slice(0, 9).map(c => ({ channel: c, count: Math.floor(Math.random() * 25) + 1 })),
-  },
-  {
-    cluster_id: 5, label: "Криптовалюты", message_count: 112, channel_count: 7,
-    avg_sentiment: 0.56, is_new: false, first_seen: hoursAgo(96), last_seen: hoursAgo(3),
-    top_entities: [
-      { id: "e11", text: "Bitcoin", type: "MISC", mention_count: 89 },
-      { id: "e12", text: "SEC", type: "ORG", mention_count: 54 },
-    ],
-    top_keywords: ["bitcoin", "ETF", "крипто", "Ethereum", "блокчейн"],
-    sparkline: [4, 6, 8, 12, 15, 11, 8, 10, 14, 18, 12, 6],
-    channels: channels.slice(0, 7).map(c => ({ channel: c, count: Math.floor(Math.random() * 20) + 1 })),
-  },
-  {
-    cluster_id: 6, label: "Климат COP30", message_count: 78, channel_count: 6,
-    avg_sentiment: 0.18, is_new: true, first_seen: hoursAgo(6), last_seen: hoursAgo(1),
-    top_entities: [
-      { id: "e13", text: "ООН", type: "ORG", mention_count: 65 },
-      { id: "e14", text: "Бразилия", type: "LOC", mention_count: 42 },
-    ],
-    top_keywords: ["COP30", "климат", "углерод", "выбросы", "нейтральность"],
-    sparkline: [0, 0, 0, 3, 8, 15, 22, 18, 12, 0, 0, 0],
-    channels: channels.slice(0, 6).map(c => ({ channel: c, count: Math.floor(Math.random() * 15) + 1 })),
+    source_status: "unknown",
   },
 ];
 
-export function mockTopicDetail(clusterId: number): TopicDetail {
-  const topic = mockTopics.find(t => t.cluster_id === clusterId) || mockTopics[0];
-  const s = topic.avg_sentiment;
+export function mockTopicDetail(id: ClusterId): TopicDetail {
+  const topic = mockTopics.find((item) => item.cluster_id === id) || mockTopics[0];
   return {
     ...topic,
-    representative_messages: makeMsgs(topic.label, topic.cluster_id, 5),
+    representative_messages: makeMessages(topic, 5),
     related_topics: mockTopics
-      .filter(t => t.cluster_id !== clusterId)
+      .filter((item) => item.cluster_id !== topic.cluster_id)
       .slice(0, 3)
-      .map(t => ({ cluster_id: t.cluster_id, label: t.label, similarity: +(Math.random() * 0.5 + 0.4).toFixed(2) })),
+      .map((item, index) => ({
+        cluster_id: item.cluster_id,
+        label: item.label,
+        similarity: Number((0.46 + index * 0.11).toFixed(2)),
+      })),
     sentiment_breakdown: {
-      positive: s > 0 ? 40 + Math.random() * 20 : 10 + Math.random() * 15,
-      neutral: 20 + Math.random() * 20,
-      negative: s < 0 ? 40 + Math.random() * 20 : 10 + Math.random() * 15,
+      positive: topic.avg_sentiment > 0 ? 48 : 16,
+      neutral: 24,
+      negative: topic.avg_sentiment < 0 ? 46 : 18,
     },
-    volume_timeline: Array.from({ length: 24 }, (_, i) => ({
-      time: hoursAgo(24 - i),
-      count: Math.floor(Math.random() * (topic.message_count / 8)) + 1,
+    volume_timeline: Array.from({ length: 12 }, (_, index) => ({
+      time: hoursAgo(12 - index),
+      count: 4 + index * 3,
     })),
+    first_source: firstSourceForCluster(topic.cluster_id),
   };
 }
 
 export const mockEntities: Entity[] = [
-  { id: "e1", text: "ЦБ РФ", type: "ORG", normalized: "Центральный банк РФ", mention_count: 1247, topic_count: 5, channel_count: 23, trend_pct: 34 },
-  { id: "e2", text: "Путин В.В.", type: "PER", normalized: "Путин Владимир Владимирович", mention_count: 987, topic_count: 8, channel_count: 31, trend_pct: 0 },
-  { id: "e3", text: "Москва", type: "LOC", mention_count: 845, topic_count: 12, channel_count: 28, trend_pct: -12 },
-  { id: "e4", text: "Набиуллина", type: "PER", normalized: "Набиуллина Эльвира Сахипзадовна", mention_count: 543, topic_count: 3, channel_count: 18, trend_pct: 67 },
-  { id: "e5", text: "ОПЕК", type: "ORG", mention_count: 456, topic_count: 2, channel_count: 15, trend_pct: 8 },
-  { id: "e6", text: "ЕС", type: "ORG", normalized: "Европейский союз", mention_count: 412, topic_count: 4, channel_count: 22, trend_pct: -5 },
-  { id: "e7", text: "Шольц", type: "PER", normalized: "Шольц Олаф", mention_count: 378, topic_count: 2, channel_count: 12, trend_pct: -28 },
-  { id: "e8", text: "OpenAI", type: "ORG", mention_count: 312, topic_count: 2, channel_count: 14, trend_pct: 45 },
-  { id: "e9", text: "Bitcoin", type: "MISC", mention_count: 289, topic_count: 1, channel_count: 11, trend_pct: 22 },
-  { id: "e10", text: "Берлин", type: "LOC", mention_count: 234, topic_count: 3, channel_count: 10, trend_pct: -15 },
-  { id: "e11", text: "SEC", type: "ORG", mention_count: 198, topic_count: 2, channel_count: 8, trend_pct: 18 },
-  { id: "e12", text: "ООН", type: "ORG", mention_count: 187, topic_count: 3, channel_count: 16, trend_pct: 5 },
+  {
+    id: "ORG:central-bank",
+    text: "Central Bank",
+    type: "ORG",
+    normalized: "Central Bank",
+    mention_count: 1247,
+    topic_count: 5,
+    channel_count: 23,
+    trend_pct: 34,
+  },
+  {
+    id: "PER:governor",
+    text: "Governor",
+    type: "PER",
+    normalized: "Governor",
+    mention_count: 843,
+    topic_count: 3,
+    channel_count: 18,
+    trend_pct: 17,
+  },
+  {
+    id: "LOC:berlin",
+    text: "Berlin",
+    type: "LOC",
+    mention_count: 622,
+    topic_count: 2,
+    channel_count: 12,
+    trend_pct: -8,
+  },
+  {
+    id: "ORG:eu",
+    text: "EU",
+    type: "ORG",
+    mention_count: 598,
+    topic_count: 4,
+    channel_count: 15,
+    trend_pct: 22,
+  },
+  {
+    id: "MISC:bitcoin",
+    text: "Bitcoin",
+    type: "MISC",
+    mention_count: 481,
+    topic_count: 2,
+    channel_count: 11,
+    trend_pct: 9,
+  },
 ];
 
-export const mockSentiment: SentimentPoint[] = Array.from({ length: 24 }, (_, i) => ({
-  time: hoursAgo(24 - i),
-  positive: Math.floor(Math.random() * 200 + 100),
-  neutral: Math.floor(Math.random() * 300 + 200),
-  negative: Math.floor(Math.random() * 150 + 80),
+export const mockSentiment: SentimentPoint[] = Array.from({ length: 12 }, (_, index) => ({
+  time: hoursAgo(12 - index),
+  positive: 40 + index * 3,
+  neutral: 55 - index,
+  negative: 18 + (index % 4) * 2,
 }));
 
-export const mockMessages: Message[] = mockTopics.flatMap(t =>
-  makeMsgs(t.label, t.cluster_id, 8)
-).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+export const mockMessages: Message[] = mockTopics
+  .flatMap((topic) => makeMessages(topic, 6))
+  .sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime());
 
 export const mockGraph: GraphData = {
   nodes: [
-    ...mockTopics.map(t => ({ id: `topic-${t.cluster_id}`, label: t.label, type: "topic" as const, weight: t.message_count, community: t.cluster_id })),
-    ...channels.map((c, i) => ({ id: `ch-${i}`, label: c, type: "channel" as const, weight: Math.floor(Math.random() * 200 + 50), community: i % 3 })),
-    ...mockEntities.slice(0, 8).map(e => ({
-      id: `ent-${e.id}`,
-      label: e.text,
-      type: `entity_${e.type.toLowerCase()}` as GraphData["nodes"][0]["type"],
-      weight: e.mention_count || 100,
-      community: Math.floor(Math.random() * 4),
+    ...mockTopics.map((topic) => ({
+      id: `topic-${topic.cluster_id}`,
+      label: topic.label,
+      type: "topic" as const,
+      weight: topic.message_count,
+      community: null,
+      source_status: topic.source_status,
     })),
+    { id: "ch-RBC", label: "RBC", type: "channel" as const, weight: 92, community: null },
+    { id: "ch-AgencyWire", label: "AgencyWire", type: "channel" as const, weight: 76, community: null },
+    {
+      id: "ent-ORG:central-bank",
+      label: "Central Bank",
+      type: "entity_org" as const,
+      weight: 210,
+      community: null,
+    },
+    {
+      id: "ent-PER:governor",
+      label: "Governor",
+      type: "entity_per" as const,
+      weight: 128,
+      community: null,
+    },
+    {
+      id: "msg-agency:101",
+      label: "AgencyWire bulletin",
+      type: "message" as const,
+      weight: 3,
+      community: null,
+      channel: "AgencyWire",
+      message_id: 101,
+      message_date: hoursAgo(8),
+      source_status: "exact" as const,
+    },
   ],
   edges: [
-    ...mockTopics.flatMap(t =>
-      t.channels.slice(0, 4).map((c, ci) => ({
-        source: `topic-${t.cluster_id}`,
-        target: `ch-${channels.indexOf(c.channel)}`,
-        weight: c.count,
-        type: "publishes",
-      }))
-    ),
-    ...mockTopics.flatMap(t =>
-      t.top_entities.slice(0, 2).map(e => ({
-        source: `topic-${t.cluster_id}`,
-        target: `ent-${e.id}`,
-        weight: e.mention_count || 50,
-        type: "mentions",
-      }))
-    ),
-    { source: "ent-e1", target: "ent-e2", weight: 120, type: "co_mentioned" },
-    { source: "ent-e4", target: "ent-e1", weight: 95, type: "co_mentioned" },
-    { source: "ent-e5", target: "ent-e8", weight: 40, type: "co_mentioned" },
+    {
+      source: `topic-${clusterId(1)}`,
+      target: "ch-RBC",
+      weight: 92,
+      type: "publishes",
+    },
+    {
+      source: `topic-${clusterId(1)}`,
+      target: "ch-AgencyWire",
+      weight: 76,
+      type: "publishes",
+    },
+    {
+      source: `topic-${clusterId(1)}`,
+      target: "ent-ORG:central-bank",
+      weight: 210,
+      type: "mentions",
+    },
+    {
+      source: `topic-${clusterId(1)}`,
+      target: "ent-PER:governor",
+      weight: 128,
+      type: "mentions",
+    },
+    {
+      source: `topic-${clusterId(1)}`,
+      target: "msg-agency:101",
+      weight: 1,
+      type: "contains",
+    },
   ],
 };

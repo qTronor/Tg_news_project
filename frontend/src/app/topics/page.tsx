@@ -7,6 +7,7 @@ import { PageTransition } from "@/components/layout/page-transition";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Sparkline } from "@/components/ui/sparkline";
+import { SourceStatusBadge } from "@/components/topics/source-status-badge";
 import { useTopics } from "@/lib/use-data";
 import { entityTypeColor } from "@/lib/utils";
 import { LayoutGrid, List, Loader2 } from "lucide-react";
@@ -62,6 +63,7 @@ export default function TopicsPage() {
                           <div className="flex items-center gap-2">
                             <h3 className="text-base font-semibold text-foreground">{topic.label}</h3>
                             {topic.is_new && <Badge variant="new">NEW</Badge>}
+                            {topic.source_status && <SourceStatusBadge status={topic.source_status} />}
                           </div>
                           <p className="text-xs text-muted-foreground mt-1">
                             {topic.message_count} {t("topics.messages")} &middot; {topic.channel_count} {t("topics.channels")}
@@ -108,6 +110,7 @@ export default function TopicsPage() {
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-semibold text-foreground">{topic.label}</span>
                         {topic.is_new && <Badge variant="new">NEW</Badge>}
+                        {topic.source_status && <SourceStatusBadge status={topic.source_status} />}
                       </div>
                       <div className="flex items-center gap-1">
                         {topic.top_entities.slice(0, 2).map(e => (

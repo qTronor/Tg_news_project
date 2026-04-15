@@ -1,0 +1,14 @@
+services:
+  source-resolver:
+    build:
+      context: ..
+      dockerfile: source_resolver/Dockerfile
+    environment:
+      SOURCE_RESOLVER__POSTGRES__HOST: "postgres"
+      SOURCE_RESOLVER__POSTGRES__PORT: "5432"
+      SOURCE_RESOLVER__POSTGRES__DATABASE: "${DB_NAME:-telegram_news}"
+      SOURCE_RESOLVER__POSTGRES__USER: "${DB_USER:-postgres}"
+      SOURCE_RESOLVER__POSTGRES__PASSWORD: "${DB_PASSWORD}"
+    ports:
+      - "8040:8040"
+      - "8041:8041"

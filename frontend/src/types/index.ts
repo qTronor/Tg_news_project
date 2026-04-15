@@ -1,3 +1,15 @@
+export type ClusterId = string;
+export type EntityType = "PER" | "ORG" | "LOC" | "MISC";
+export type SourceStatus = "exact" | "probable" | "unknown";
+export type SourceType =
+  | "exact_forward"
+  | "exact_reply"
+  | "exact_url"
+  | "quoted"
+  | "inferred_semantic"
+  | "earliest_in_cluster"
+  | "unknown";
+
 export interface Message {
   event_id: string;
   channel: string;
@@ -6,27 +18,71 @@ export interface Message {
   date: string;
   views: number;
   forwards: number;
-  topic_label?: string;
-  cluster_id?: number;
+  topic_label?: string | null;
+  cluster_id?: ClusterId | null;
   sentiment_score?: number;
   sentiment_label?: string;
+  sentiment_confidence?: number;
   entities?: Entity[];
+  source_status?: SourceStatus;
+  source_type?: SourceType;
+  source_confidence?: number;
+  source_event_id?: string | null;
+  source_channel?: string | null;
 }
 
 export interface Entity {
   id: string;
   text: string;
-  type: "PER" | "ORG" | "LOC" | "MISC";
+  type: EntityType;
   normalized?: string;
-  confidence?: number;
+  confidence?: number | null;
   mention_count?: number;
   topic_count?: number;
   channel_count?: number;
   trend_pct?: number;
 }
 
+export interface SourceResolution {
+  resolution_kind: "exact" | "inferred";
+  source_type: SourceType;
+  source_confidence: number;
+  source_event_id: string | null;
+  source_channel: string | null;
+  source_message_id: number | null;
+  source_message_date: string | null;
+  source_snippet: string | null;
+  explanation: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+}
+
+export interface PropagationLink {
+  child_event_id: string;
+  child_channel: string;
+  child_message_id: number;
+  child_message_date: string | null;
+  parent_event_id: string;
+  parent_channel: string | null;
+  parent_message_id: number | null;
+  parent_message_date: string | null;
+  link_type: Exclude<SourceType, "unknown">;
+  link_confidence: number;
+  resolution_kind: "exact" | "inferred";
+  explanation: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+}
+
+export interface FirstSourcePayload {
+  cluster_id: ClusterId;
+  source_status: SourceStatus;
+  exact_source: SourceResolution | null;
+  inferred_source: SourceResolution | null;
+  display_source: SourceResolution | null;
+  propagation_chain: PropagationLink[];
+}
+
 export interface Topic {
-  cluster_id: number;
+  cluster_id: ClusterId;
   label: string;
   message_count: number;
   channel_count: number;
@@ -38,6 +94,7 @@ export interface Topic {
   last_seen: string;
   sparkline: number[];
   channels: ChannelStat[];
+  source_status?: SourceStatus;
 }
 
 export interface ChannelStat {
@@ -47,9 +104,10 @@ export interface ChannelStat {
 
 export interface TopicDetail extends Topic {
   representative_messages: Message[];
-  related_topics: { cluster_id: number; label: string; similarity: number }[];
+  related_topics: { cluster_id: ClusterId; label: string; similarity: number }[];
   sentiment_breakdown: { positive: number; neutral: number; negative: number };
   volume_timeline: { time: string; count: number }[];
+  first_source?: FirstSourcePayload | null;
 }
 
 export interface SentimentPoint {
@@ -73,7 +131,11 @@ export interface GraphNode {
   label: string;
   type: "topic" | "channel" | "entity_per" | "entity_org" | "entity_loc" | "message";
   weight: number;
-  community?: number;
+  community?: number | null;
+  channel?: string;
+  message_id?: number;
+  message_date?: string;
+  source_status?: SourceStatus;
 }
 
 export interface GraphEdge {
@@ -81,6 +143,7 @@ export interface GraphEdge {
   target: string;
   weight: number;
   type: string;
+  confidence?: number;
 }
 
 export interface GraphData {

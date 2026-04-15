@@ -68,7 +68,11 @@ export default function FeedPage() {
               className="bg-muted rounded-lg px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary/30 transition-all duration-200"
             >
               <option value="All">{t("feed.allTopics")}</option>
-              {(topics || []).map(topic => <option key={topic.cluster_id} value={topic.label}>{topic.label}</option>)}
+              {(topics || []).map(topic => (
+                <option key={topic.cluster_id} value={topic.cluster_id}>
+                  {topic.label}
+                </option>
+              ))}
             </select>
 
             <select

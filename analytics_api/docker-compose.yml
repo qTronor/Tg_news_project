@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  analytics-api:
+    build: .
+    ports:
+      - "8020:8020"
+      - "8021:8021"
+    environment:
+      ANALYTICS_API__POSTGRES__HOST: postgres
+      ANALYTICS_API__POSTGRES__PORT: 5432
+      ANALYTICS_API__POSTGRES__DATABASE: telegram_news
+      ANALYTICS_API__POSTGRES__USER: postgres
+      ANALYTICS_API__POSTGRES__PASSWORD: postgres

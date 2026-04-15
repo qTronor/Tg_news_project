@@ -1,0 +1,31 @@
+service_name: analytics-api
+
+postgres:
+  host: localhost
+  port: 5432
+  database: telegram_news
+  user: postgres
+  password: postgres
+  min_size: 1
+  max_size: 5
+  command_timeout: 30
+
+api:
+  host: 0.0.0.0
+  port: 8020
+  default_window_hours: 24
+  default_documents_limit: 50
+  max_documents_limit: 200
+  default_graph_nodes: 30
+  max_graph_nodes: 120
+
+metrics:
+  host: 0.0.0.0
+  port: 8021
+
+health:
+  host: 0.0.0.0
+  port: 8020
+
+logging:
+  level: INFO

@@ -5,7 +5,7 @@
 Репозиторий: `c:\Users\roman\OneDrive\Desktop\Tg_news_project`
 
 ### Git-ветки
-- `main` — бэкенд микросервисы (message_persister, preprocessor, sentiment_analyzer, ner_extractor, topic_clusterer, analytics_duckdb)
+- `main` — бэкенд микросервисы (message_persister, preprocessor, sentiment_analyzer, ner_extractor, topic_clusterer)
 - `feature/frontend-ui` — фронтенд Next.js (закоммичен)
 - `feature/auth-system` (текущая) — система аутентификации, профили пользователей, i18n (НЕ закоммичена, нужно закоммитить)
 
@@ -13,16 +13,15 @@
 
 ## Бэкенд (main ветка)
 
-Микросервисная event-driven архитектура на Python + Kafka + PostgreSQL + Neo4j + DuckDB:
+Микросервисная event-driven архитектура на Python + Kafka + PostgreSQL + Neo4j + SQLite:
 
 - **message_persister** — сохраняет сырые сообщения из Telegram в PostgreSQL
 - **preprocessor** — очистка/нормализация текста
 - **sentiment_analyzer** — тональность (RuBERT), пишет в Kafka `sentiment.enriched`
 - **ner_extractor** — извлечение сущностей (Natasha NER), пишет в Kafka `ner.enriched`
-- **topic_clusterer** — эмбеддинги (SBERT) + UMAP + HDBSCAN → кластеры в DuckDB
-- **analytics_duckdb** — REST API на порту 8020 для UI, читает из Parquet lake
+- **topic_clusterer** — эмбеддинги (SBERT) + UMAP + HDBSCAN → кластеры в SQLite, экспорт в Parquet
 
-### API endpoints (analytics_duckdb, порт 8020):
+### API endpoints (Analytics API, порт 8020 — в разработке):
 - `GET /analytics/overview/clusters` — обзор кластеров
 - `GET /analytics/entities/top` — топ сущностей
 - `GET /analytics/sentiment/dynamics` — динамика тональности
@@ -143,7 +142,7 @@ auth_service/
 - `components/ui/` — Card, Badge, KpiCard, Sparkline
 
 **Data layer:**
-- `lib/api.ts` — API client для analytics_duckdb (fetch + AbortController, 5s timeout)
+- `lib/api.ts` — API client для Analytics API (fetch + AbortController, 5s timeout)
 - `lib/auth.ts` — Auth API client: login, register, logout, getProfile, editMessage, channels, reactions, audit, **forgotPassword, resetPassword, verifyEmail, resendVerification**. JWT управление: localStorage, автоматический refresh до истечения, singleton promise, auth:logout event на 401
 - `lib/use-data.ts` — React Query хуки (useOverview, useTopics, useTopicDetail, useEntities, useSentiment, useMessages, useGraph). isDemo=true → mock, isDemo=false → API + polling 15s
 - `lib/mock-data.ts` — Реалистичные заглушки: 6 тем, 12 сущностей, ~48 сообщений, граф (русскоязычные данные)

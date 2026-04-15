@@ -1,0 +1,31 @@
+service_name: "source-resolver"
+
+postgres:
+  host: "postgres"
+  port: 5432
+  database: "telegram_news"
+  user: "postgres"
+  password: "postgres"
+  min_size: 1
+  max_size: 5
+  command_timeout: 30
+
+health:
+  host: "0.0.0.0"
+  port: 8040
+
+metrics:
+  host: "0.0.0.0"
+  port: 8041
+
+scheduler:
+  interval_seconds: 300
+  cluster_batch_size: 20
+
+resolution:
+  inferred_threshold: 0.55
+  earliest_cluster_confidence: 0.35
+  quote_min_chars: 20
+
+logging:
+  level: "INFO"

@@ -5,24 +5,28 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { useDemoContext, useGlobalTimeRange } from "@/components/providers";
 import { api } from "./api";
 import {
-  mockOverview,
-  mockTopics,
-  mockTopicDetail,
   mockEntities,
-  mockSentiment,
-  mockMessages,
   mockGraph,
+  mockMessages,
+  mockOverview,
+  mockSentiment,
+  mockTopicDetail,
+  mockTopics,
 } from "./mock-data";
 import { config } from "./config";
 import type {
+  ClusterId,
+  Entity,
+  FirstSourcePayload,
+  GraphData,
+  Message,
   OverviewStats,
+  SentimentPoint,
   Topic,
   TopicDetail,
-  Message,
-  Entity,
-  SentimentPoint,
-  GraphData,
 } from "@/types";
+
+export type GraphMode = "overview" | "propagation";
 
 function useTimeParams() {
   const { range } = useGlobalTimeRange();
@@ -35,9 +39,7 @@ function useErrorReporter<T>(query: UseQueryResult<T>): UseQueryResult<T> {
   useEffect(() => {
     if (query.error) {
       setLastError(
-        query.error instanceof Error
-          ? query.error.message
-          : "Failed to connect to API"
+        query.error instanceof Error ? query.error.message : "Failed to connect to API"
       );
     }
     if (query.isSuccess) {
@@ -74,7 +76,7 @@ export function useTopics() {
   );
 }
 
-export function useTopicDetail(clusterId: number) {
+export function useTopicDetail(clusterId: ClusterId) {
   const { isDemo } = useDemoContext();
   const { from, to } = useTimeParams();
 
@@ -89,7 +91,21 @@ export function useTopicDetail(clusterId: number) {
   );
 }
 
-export function useEntities(entityType?: string, clusterId?: number) {
+export function useClusterFirstSource(clusterId: ClusterId) {
+  const { isDemo } = useDemoContext();
+
+  return useErrorReporter(
+    useQuery<FirstSourcePayload | null>({
+      queryKey: ["clusterFirstSource", clusterId, isDemo],
+      queryFn: () =>
+        isDemo
+          ? Promise.resolve(mockTopicDetail(clusterId).first_source ?? null)
+          : api.getClusterFirstSource(clusterId),
+    })
+  );
+}
+
+export function useEntities(entityType?: string, clusterId?: ClusterId) {
   const { isDemo } = useDemoContext();
   const { from, to } = useTimeParams();
 
@@ -100,7 +116,7 @@ export function useEntities(entityType?: string, clusterId?: number) {
         isDemo
           ? Promise.resolve(
               mockEntities.filter(
-                (e) => !entityType || entityType === "All" || e.type === entityType
+                (entity) => !entityType || entityType === "All" || entity.type === entityType
               )
             )
           : api.getTopEntities(from, to, entityType, clusterId),
@@ -109,7 +125,7 @@ export function useEntities(entityType?: string, clusterId?: number) {
   );
 }
 
-export function useSentiment(bucket = "hour", channel?: string, clusterId?: number) {
+export function useSentiment(bucket = "hour", channel?: string, clusterId?: ClusterId) {
   const { isDemo } = useDemoContext();
   const { from, to } = useTimeParams();
 
@@ -127,7 +143,7 @@ export function useSentiment(bucket = "hour", channel?: string, clusterId?: numb
 
 export function useMessages(filters?: {
   channel?: string;
-  topic?: string;
+  topic?: ClusterId;
   sentiment?: string;
   entity?: string;
   search?: string;
@@ -140,24 +156,27 @@ export function useMessages(filters?: {
       queryKey: ["messages", filters, from, to, isDemo],
       queryFn: () => {
         if (isDemo) {
-          let msgs = [...mockMessages];
-          if (filters?.channel && filters.channel !== "All")
-            msgs = msgs.filter((m) => m.channel === filters.channel);
-          if (filters?.topic && filters.topic !== "All")
-            msgs = msgs.filter((m) => m.topic_label === filters.topic);
-          if (filters?.search)
-            msgs = msgs.filter((m) =>
-              m.text.toLowerCase().includes(filters.search!.toLowerCase())
+          let messages = [...mockMessages];
+          if (filters?.channel && filters.channel !== "All") {
+            messages = messages.filter((message) => message.channel === filters.channel);
+          }
+          if (filters?.topic && filters.topic !== "All") {
+            messages = messages.filter((message) => message.cluster_id === filters.topic);
+          }
+          if (filters?.search) {
+            messages = messages.filter((message) =>
+              message.text.toLowerCase().includes(filters.search!.toLowerCase())
             );
+          }
           if (filters?.sentiment && filters.sentiment !== "All") {
-            msgs = msgs.filter((m) => {
-              const s = m.sentiment_score || 0;
-              if (filters.sentiment === "Positive") return s > 0.2;
-              if (filters.sentiment === "Negative") return s < -0.2;
-              return s >= -0.2 && s <= 0.2;
+            messages = messages.filter((message) => {
+              const score = message.sentiment_score || 0;
+              if (filters.sentiment === "Positive") return score > 0.2;
+              if (filters.sentiment === "Negative") return score < -0.2;
+              return score >= -0.2 && score <= 0.2;
             });
           }
-          return Promise.resolve(msgs);
+          return Promise.resolve(messages);
         }
         return api.getMessages(from, to, filters);
       },
@@ -166,15 +185,22 @@ export function useMessages(filters?: {
   );
 }
 
-export function useGraph(focusId?: string, depth = 2) {
+export function useGraph(
+  focusId?: string,
+  depth = 2,
+  mode: GraphMode = "overview",
+  clusterId?: ClusterId
+) {
   const { isDemo } = useDemoContext();
   const { from, to } = useTimeParams();
 
   return useErrorReporter(
     useQuery<GraphData>({
-      queryKey: ["graph", focusId, depth, from, to, isDemo],
+      queryKey: ["graph", focusId, depth, mode, clusterId, from, to, isDemo],
       queryFn: () =>
-        isDemo ? Promise.resolve(mockGraph) : api.getGraph(from, to, focusId, depth),
+        isDemo
+          ? Promise.resolve(mockGraph)
+          : api.getGraph(from, to, focusId, depth, mode, clusterId),
     })
   );
 }

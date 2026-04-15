@@ -7,6 +7,7 @@ import { PageTransition } from "@/components/layout/page-transition";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MessageCard } from "@/components/feed/message-card";
+import { SourcePanel } from "@/components/topics/source-panel";
 import { VolumeLineChart } from "@/components/charts/volume-line";
 import { ChannelBarChart } from "@/components/charts/channel-bar";
 import { SentimentDonutChart } from "@/components/charts/sentiment-donut";
@@ -19,8 +20,7 @@ import Link from "next/link";
 export default function TopicDetailPage({ params }: { params: Promise<{ clusterId: string }> }) {
   const { t } = useTranslation();
   const { clusterId } = use(params);
-  const id = parseInt(clusterId);
-  const { data: detail, isLoading } = useTopicDetail(id);
+  const { data: detail, isLoading } = useTopicDetail(clusterId);
 
   if (isLoading || !detail) {
     return (
@@ -44,7 +44,7 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
               {t("topics.backToTopics")}
             </Link>
             <div className="flex items-center gap-2">
-              <Link href={`/graph?focus=topic-${clusterId}`}>
+              <Link href={`/graph?mode=propagation&clusterId=${encodeURIComponent(clusterId)}`}>
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
@@ -139,6 +139,8 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
               </div>
             </Card>
           </div>
+
+          <SourcePanel source={detail.first_source} />
 
           <Card>
             <CardHeader>

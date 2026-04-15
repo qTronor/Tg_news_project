@@ -7,6 +7,7 @@ import { formatNumber, entityTypeColor, sentimentColor, sentimentLabel } from "@
 import { useAuth } from "@/components/auth/auth-provider";
 import { authApi } from "@/lib/auth";
 import { MessageEditModal } from "@/components/admin/message-edit-modal";
+import { SourceStatusBadge } from "@/components/topics/source-status-badge";
 import type { Message } from "@/types";
 import { Eye, Forward, Clock, ThumbsUp, ThumbsDown, Pencil } from "lucide-react";
 import { format, parseISO } from "date-fns";
@@ -103,6 +104,12 @@ export function MessageCard({ message, index }: Props) {
                 <Badge variant="entity" color={entityTypeColor(e.type)}>{e.text}</Badge>
               </Link>
             ))}
+            {message.source_status && (
+              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <SourceStatusBadge status={message.source_status} className="px-1.5 py-0.5" />
+                {message.source_channel && <span>via {message.source_channel}</span>}
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <button
