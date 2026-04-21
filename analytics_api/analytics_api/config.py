@@ -33,6 +33,7 @@ class ApiConfig(BaseModel):
     max_documents_limit: int = 200
     default_graph_nodes: int = 30
     max_graph_nodes: int = 120
+    graph_metrics_cache_ttl_seconds: int = 900
 
 
 class MetricsConfig(BaseModel):

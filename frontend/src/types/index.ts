@@ -102,12 +102,48 @@ export interface ChannelStat {
   count: number;
 }
 
+export interface TopicKpiMetrics {
+  importance_score?: number | null;
+  novelty_score?: number | null;
+  growth_rate?: number | null;
+}
+
+export interface TopicTimelineAnnotation {
+  time: string;
+  label: string;
+  description?: string | null;
+}
+
+export interface TopicGraphAnalytics {
+  node_count?: number | null;
+  edge_count?: number | null;
+  communities_count?: number | null;
+  bridge_nodes_count?: number | null;
+  density?: number | null;
+  top_central_entity?: Entity | null;
+  top_central_channel?: ChannelStat | null;
+  summary?: string | null;
+}
+
+export interface TopicSourceProvenance {
+  first_seen?: string | null;
+  first_source_channel?: string | null;
+  source_confidence?: number | null;
+  propagation_count?: number | null;
+}
+
 export interface TopicDetail extends Topic {
   representative_messages: Message[];
   related_topics: { cluster_id: ClusterId; label: string; similarity: number }[];
   sentiment_breakdown: { positive: number; neutral: number; negative: number };
   volume_timeline: { time: string; count: number }[];
   first_source?: FirstSourcePayload | null;
+  summary?: string | null;
+  status?: "new" | "growing" | "declining" | "stable" | SourceStatus | null;
+  kpi_metrics?: TopicKpiMetrics | null;
+  timeline_annotations?: TopicTimelineAnnotation[];
+  graph_analytics?: TopicGraphAnalytics | null;
+  source_provenance?: TopicSourceProvenance | null;
 }
 
 export interface SentimentPoint {

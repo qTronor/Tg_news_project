@@ -152,6 +152,8 @@ CREATE TABLE IF NOT EXISTS message_embeddings (
     channel TEXT NOT NULL,
     message_id INTEGER NOT NULL,
     text TEXT,
+    language TEXT,
+    analysis_mode TEXT,
     embedding TEXT,
     trace_id TEXT,
     event_timestamp TEXT NOT NULL,
@@ -191,6 +193,8 @@ CREATE TABLE IF NOT EXISTS cluster_runs (
 
 SQLITE_SCHEMA_PATCHES = [
     "ALTER TABLE message_embeddings ADD COLUMN trace_id TEXT",
+    "ALTER TABLE message_embeddings ADD COLUMN language TEXT",
+    "ALTER TABLE message_embeddings ADD COLUMN analysis_mode TEXT",
 ]
 
 
@@ -219,6 +223,8 @@ class MessageContext:
     message_id: int
     channel: str
     original_text: str
+    original_language: str
+    analysis_mode: str
     payload: dict
     key: str
     topic: str
@@ -450,7 +456,7 @@ class TopicClustererService:
 
     async def _handle_metrics(self, request: web.Request) -> web.Response:
         return web.Response(
-            body=generate_latest(), content_type=CONTENT_TYPE_LATEST
+            body=generate_latest(), headers={"Content-Type": CONTENT_TYPE_LATEST}
         )
 
     # ── record handling (online ingest) ─────────────────────────────
@@ -572,6 +578,11 @@ class TopicClustererService:
             or payload["payload"].get("cleaned_text")
             or payload["payload"].get("original_text", "")
         )
+        original_language = payload["payload"].get(
+            "original_language",
+            payload["payload"].get("language", "und"),
+        )
+        analysis_mode = payload["payload"].get("analysis_mode", "full")
 
         try:
             event_timestamp_dt = parse_iso_datetime(event_timestamp)
@@ -610,6 +621,8 @@ class TopicClustererService:
             message_id=message_id,
             channel=channel,
             original_text=original_text,
+            original_language=original_language,
+            analysis_mode=analysis_mode,
             payload=payload,
             key=key,
             topic=record.topic,
@@ -651,8 +664,9 @@ class TopicClustererService:
         self._db.execute(
             """
             INSERT INTO message_embeddings
-                (event_id, channel, message_id, text, embedding, trace_id, event_timestamp, clustered)
-            VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(
+                (event_id, channel, message_id, text, language, analysis_mode,
+                 embedding, trace_id, event_timestamp, clustered)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(
                 (SELECT clustered FROM message_embeddings WHERE event_id = ?),
                 0
             ))
@@ -660,6 +674,8 @@ class TopicClustererService:
                 channel = excluded.channel,
                 message_id = excluded.message_id,
                 text = excluded.text,
+                language = excluded.language,
+                analysis_mode = excluded.analysis_mode,
                 embedding = excluded.embedding,
                 trace_id = excluded.trace_id,
                 event_timestamp = excluded.event_timestamp,
@@ -670,6 +686,8 @@ class TopicClustererService:
                 context.channel,
                 context.message_id,
                 text[:2000],
+                context.original_language,
+                context.analysis_mode,
                 json.dumps(embedding.tolist()),
                 context.trace_id,
                 (message_date_dt or context.event_timestamp_dt).isoformat(),
@@ -758,7 +776,7 @@ class TopicClustererService:
             return None
 
         rows = self._db.execute(
-            "SELECT event_id, channel, message_id, text, embedding, trace_id, event_timestamp "
+            "SELECT event_id, channel, message_id, text, embedding, trace_id, event_timestamp, language, analysis_mode "
             "FROM message_embeddings WHERE clustered = 0 "
             "ORDER BY event_timestamp"
         ).fetchall()
@@ -774,6 +792,8 @@ class TopicClustererService:
         message_ids = [r[2] for r in rows]
         trace_ids = [r[5] for r in rows]
         raw_timestamps = [r[6] for r in rows]
+        languages = [r[7] for r in rows]
+        analysis_modes = [r[8] for r in rows]
         timestamps = [
             parse_iso_datetime(ts) if isinstance(ts, str) else ts
             for ts in raw_timestamps
@@ -804,6 +824,10 @@ class TopicClustererService:
             "min_dist": self._config.clustering.min_dist,
             "window_hours": window_hours,
             "strategy": strategy,
+            "embedding_model": self._config.model.sbert_model,
+            "multilingual": True,
+            "languages": sorted({lang for lang in languages if lang}),
+            "analysis_modes": sorted({mode for mode in analysis_modes if mode}),
         }
 
         assignments: list[dict[str, Any]] = []

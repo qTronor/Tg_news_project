@@ -1,18 +1,28 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
+from urllib.parse import unquote
 
 import asyncpg
 from aiohttp import web
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from analytics_api.config import AppConfig
-from analytics_api.metrics import API_REQUESTS_TOTAL, API_REQUEST_LATENCY
+from analytics_api.graph_analytics import ALGO_VERSION, analyze_topic_graph, build_topic_graph
+from analytics_api.metrics import (
+    API_REQUEST_LATENCY,
+    API_REQUESTS_TOTAL,
+    GRAPH_ANALYTICS_CACHE_TOTAL,
+    GRAPH_ANALYTICS_DURATION,
+    GRAPH_ANALYTICS_RUNS_TOTAL,
+)
 
 
 logger = logging.getLogger("analytics_api")
@@ -385,12 +395,122 @@ FROM cluster_source_resolutions
 WHERE public_cluster_id = $1;
 """
 
+SELECT_TOPIC_GRAPH_ENTITY_MENTIONS_SQL = """
+SELECT
+    rm.event_id,
+    rm.channel,
+    lower(COALESCE(nr.normalized_text, nr.entity_text)) AS entity_key,
+    COALESCE(max(nr.normalized_text), min(nr.entity_text)) AS entity_text,
+    nr.entity_type,
+    count(*) AS mention_count
+FROM cluster_assignments ca
+JOIN raw_messages rm ON rm.event_id = ca.event_id
+JOIN ner_results nr ON nr.event_id = ca.event_id
+WHERE ca.public_cluster_id = $1
+  AND rm.message_date >= $2
+  AND rm.message_date <= $3
+GROUP BY
+    rm.event_id,
+    rm.channel,
+    lower(COALESCE(nr.normalized_text, nr.entity_text)),
+    nr.entity_type
+ORDER BY rm.event_id ASC, mention_count DESC, entity_text ASC;
+"""
+
+SELECT_GRAPH_SUBGRAPH_CACHE_SQL = """
+SELECT metrics_json
+FROM graph_subgraph_metrics
+WHERE cache_key = $1
+  AND expires_at > NOW();
+"""
+
+UPSERT_GRAPH_SUBGRAPH_METRICS_SQL = """
+INSERT INTO graph_subgraph_metrics (
+    cache_key,
+    public_cluster_id,
+    window_start,
+    window_end,
+    algorithm_version,
+    node_count,
+    edge_count,
+    metrics_json,
+    computed_at,
+    expires_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8::jsonb, NOW(), NOW() + ($9::text)::interval
+)
+ON CONFLICT (cache_key) DO UPDATE SET
+    public_cluster_id = EXCLUDED.public_cluster_id,
+    window_start = EXCLUDED.window_start,
+    window_end = EXCLUDED.window_end,
+    algorithm_version = EXCLUDED.algorithm_version,
+    node_count = EXCLUDED.node_count,
+    edge_count = EXCLUDED.edge_count,
+    metrics_json = EXCLUDED.metrics_json,
+    computed_at = EXCLUDED.computed_at,
+    expires_at = EXCLUDED.expires_at;
+"""
+
+DELETE_GRAPH_TOP_NODES_SQL = "DELETE FROM graph_top_nodes WHERE cache_key = $1;"
+
+INSERT_GRAPH_TOP_NODE_SQL = """
+INSERT INTO graph_top_nodes (
+    cache_key,
+    node_id,
+    node_label,
+    node_type,
+    community_id,
+    degree_centrality,
+    betweenness_centrality,
+    pagerank,
+    bridge_score,
+    is_bridge,
+    rank
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
+"""
+
+DELETE_GRAPH_COMMUNITIES_SQL = "DELETE FROM graph_topic_communities WHERE cache_key = $1;"
+
+INSERT_GRAPH_COMMUNITY_SQL = """
+INSERT INTO graph_topic_communities (
+    cache_key,
+    community_id,
+    node_count,
+    edge_count,
+    entity_count,
+    channel_count,
+    summary_json
+) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb);
+"""
+
 
 def _parse_iso_datetime(value: str) -> datetime:
-    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    normalized = value.replace("Z", "+00:00")
+    if len(normalized) >= 6 and normalized[-6] == " " and normalized[-5] in {"+", "-"}:
+        normalized = f"{normalized[:-6]}{normalized[-5:]}"
+    elif (
+        len(normalized) >= 6
+        and normalized[-6] == " "
+        and normalized[-5:-3].isdigit()
+        and normalized[-2:].isdigit()
+    ):
+        normalized = f"{normalized[:-6]}+{normalized[-5:]}"
+    dt = datetime.fromisoformat(normalized)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _decode_cluster_id(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    decoded = value
+    for _ in range(2):
+        next_value = unquote(decoded)
+        if next_value == decoded:
+            break
+        decoded = next_value
+    return decoded
 
 
 def _utc_iso(value: Optional[datetime]) -> Optional[str]:
@@ -514,6 +634,30 @@ class AnalyticsApiService:
         )
 
         @web.middleware
+        async def cors_middleware(request: web.Request, handler):
+            origin = request.headers.get("Origin")
+            allowed_origins = {
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+            }
+
+            if request.method == "OPTIONS":
+                response = web.Response(status=204)
+            else:
+                response = await handler(request)
+
+            if origin in allowed_origins:
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Vary"] = "Origin"
+                response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+                response.headers["Access-Control-Allow-Headers"] = (
+                    "Content-Type, Authorization"
+                )
+                response.headers["Access-Control-Max-Age"] = "86400"
+
+            return response
+
+        @web.middleware
         async def metrics_middleware(request: web.Request, handler):
             started = time.monotonic()
             route = self._route_label(request)
@@ -536,7 +680,7 @@ class AnalyticsApiService:
                     route=route,
                 ).observe(time.monotonic() - started)
 
-        app = web.Application(middlewares=[metrics_middleware])
+        app = web.Application(middlewares=[cors_middleware, metrics_middleware])
         app.router.add_get("/health", self._handle_health)
         app.router.add_get("/metrics", self._handle_metrics)
         app.router.add_get("/analytics/overview", self._handle_overview)
@@ -553,6 +697,10 @@ class AnalyticsApiService:
         app.router.add_get(
             "/analytics/clusters/{clusterId}/related",
             self._handle_cluster_related,
+        )
+        app.router.add_get(
+            "/analytics/clusters/{clusterId}/graph-metrics",
+            self._handle_cluster_graph_metrics,
         )
         app.router.add_get("/analytics/entities/top", self._handle_top_entities)
         app.router.add_get(
@@ -680,7 +828,7 @@ class AnalyticsApiService:
         return web.json_response(topics)
 
     async def _handle_cluster_detail(self, request: web.Request) -> web.Response:
-        cluster_id = request.match_info["clusterId"]
+        cluster_id = _decode_cluster_id(request.match_info["clusterId"])
         from_dt, to_dt = self._parse_time_range(request)
         async with self._conn() as conn:
             payload = await self._build_topic_detail(conn, cluster_id, from_dt, to_dt)
@@ -689,7 +837,7 @@ class AnalyticsApiService:
         return web.json_response(payload)
 
     async def _handle_cluster_documents(self, request: web.Request) -> web.Response:
-        cluster_id = request.match_info["clusterId"]
+        cluster_id = _decode_cluster_id(request.match_info["clusterId"])
         from_dt, to_dt = self._parse_time_range(request)
         limit = _limit(
             request.query.get("limit"),
@@ -710,7 +858,7 @@ class AnalyticsApiService:
         return web.json_response(payload)
 
     async def _handle_cluster_first_source(self, request: web.Request) -> web.Response:
-        cluster_id = request.match_info["clusterId"]
+        cluster_id = _decode_cluster_id(request.match_info["clusterId"])
         async with self._conn() as conn:
             payload = await self._build_first_source_payload(conn, cluster_id)
         if payload is None:
@@ -718,16 +866,26 @@ class AnalyticsApiService:
         return web.json_response(payload)
 
     async def _handle_cluster_related(self, request: web.Request) -> web.Response:
-        cluster_id = request.match_info["clusterId"]
+        cluster_id = _decode_cluster_id(request.match_info["clusterId"])
         from_dt, to_dt = self._parse_time_range(request)
         async with self._conn() as conn:
             related = await self._build_related_topics(conn, cluster_id, from_dt, to_dt)
         return web.json_response(related)
 
+    async def _handle_cluster_graph_metrics(self, request: web.Request) -> web.Response:
+        cluster_id = _decode_cluster_id(request.match_info["clusterId"])
+        from_dt, to_dt = self._parse_time_range(request)
+        force = request.query.get("refresh") in {"1", "true", "yes"}
+        async with self._conn() as conn:
+            payload = await self._build_topic_graph_metrics(conn, cluster_id, from_dt, to_dt, force)
+        if payload is None:
+            raise web.HTTPNotFound(text=f"cluster not found: {cluster_id}")
+        return web.json_response(payload)
+
     async def _handle_top_entities(self, request: web.Request) -> web.Response:
         from_dt, to_dt = self._parse_time_range(request)
         entity_type = _backend_entity_type(request.query.get("entity_type"))
-        cluster_id = request.query.get("cluster_id")
+        cluster_id = _decode_cluster_id(request.query.get("cluster_id"))
         async with self._conn() as conn:
             run_id = await self._latest_run_id(conn)
             rows = await conn.fetch(
@@ -758,7 +916,7 @@ class AnalyticsApiService:
     async def _handle_sentiment_dynamics(self, request: web.Request) -> web.Response:
         from_dt, to_dt = self._parse_time_range(request)
         channel = request.query.get("channel")
-        cluster_id = request.query.get("cluster_id")
+        cluster_id = _decode_cluster_id(request.query.get("cluster_id"))
         bucket = request.query.get("bucket", "hour")
         if bucket not in {"hour", "day"}:
             bucket = "hour"
@@ -796,7 +954,7 @@ class AnalyticsApiService:
     async def _handle_messages(self, request: web.Request) -> web.Response:
         from_dt, to_dt = self._parse_time_range(request)
         channel = request.query.get("channel")
-        cluster_id = request.query.get("topic")
+        cluster_id = _decode_cluster_id(request.query.get("topic"))
         search = request.query.get("search")
         sentiment = request.query.get("sentiment")
         if sentiment:
@@ -831,7 +989,9 @@ class AnalyticsApiService:
         focus = request.query.get("focus")
         depth = _limit(request.query.get("depth"), 2, 4)
         mode = request.query.get("mode", "overview")
-        cluster_id = request.query.get("cluster_id") or request.query.get("clusterId")
+        cluster_id = _decode_cluster_id(
+            request.query.get("cluster_id") or request.query.get("clusterId")
+        )
 
         async with self._conn() as conn:
             if mode == "propagation" and cluster_id:
@@ -1135,6 +1295,10 @@ class AnalyticsApiService:
         event_ids = [row["event_id"] for row in rows]
         entities_map = await self._message_entities_map(conn, event_ids)
         resolutions_map = await self._message_resolution_map(conn, event_ids)
+        cluster_ids = [
+            row["public_cluster_id"] for row in rows if row["public_cluster_id"]
+        ]
+        topic_labels = await self._cluster_label_map(conn, cluster_ids)
 
         payload = []
         for row in rows:
@@ -1152,7 +1316,7 @@ class AnalyticsApiService:
                     "date": _utc_iso(row["message_date"]),
                     "views": int(row["views"] or 0),
                     "forwards": int(row["forwards"] or 0),
-                    "topic_label": None,
+                    "topic_label": topic_labels.get(row["public_cluster_id"]),
                     "cluster_id": row["public_cluster_id"],
                     "sentiment_score": round(float(row["ui_sentiment_score"] or 0), 4),
                     "sentiment_label": (row["sentiment_label"] or "neutral").title(),
@@ -1172,6 +1336,35 @@ class AnalyticsApiService:
                 }
             )
         return payload
+
+    async def _cluster_label_map(
+        self,
+        conn: asyncpg.Connection,
+        cluster_ids: list[str],
+    ) -> dict[str, str]:
+        if not cluster_ids:
+            return {}
+        rows = await conn.fetch(
+            """
+            SELECT public_cluster_id, source_snippet, explanation_json
+            FROM cluster_source_resolutions
+            WHERE public_cluster_id = ANY($1::varchar[])
+              AND resolution_kind = 'inferred';
+            """,
+            cluster_ids,
+        )
+        labels: dict[str, str] = {}
+        for row in rows:
+            explanation = row["explanation_json"] or {}
+            if isinstance(explanation, str):
+                try:
+                    explanation = json.loads(explanation)
+                except json.JSONDecodeError:
+                    explanation = {}
+            label = explanation.get("topic_label") or row["source_snippet"]
+            if label:
+                labels[row["public_cluster_id"]] = str(label)
+        return labels
 
     async def _message_entities_map(
         self,
@@ -1408,6 +1601,16 @@ class AnalyticsApiService:
         exact: Optional[dict[str, Any]],
         inferred: Optional[dict[str, Any]],
     ) -> str:
+        for source in (inferred, exact):
+            explanation = (source or {}).get("explanation") or {}
+            if isinstance(explanation, str):
+                try:
+                    explanation = json.loads(explanation)
+                except json.JSONDecodeError:
+                    explanation = {}
+            topic_label = explanation.get("topic_label")
+            if topic_label:
+                return str(topic_label)
         if entities:
             top = [entity["text"] for entity in entities[:2] if entity.get("text")]
             if top:
@@ -1426,6 +1629,144 @@ class AnalyticsApiService:
         if len(text) > 48:
             compact += "..."
         return compact
+
+    async def _build_topic_graph_metrics(
+        self,
+        conn: asyncpg.Connection,
+        cluster_id: str,
+        from_dt: datetime,
+        to_dt: datetime,
+        force: bool = False,
+    ) -> Optional[dict[str, Any]]:
+        cache_key = self._graph_cache_key(cluster_id, from_dt, to_dt)
+        if not force:
+            cached = await self._load_topic_graph_metrics_cache(conn, cache_key)
+            if cached is not None:
+                GRAPH_ANALYTICS_CACHE_TOTAL.labels(result="hit").inc()
+                return cached
+            GRAPH_ANALYTICS_CACHE_TOTAL.labels(result="miss").inc()
+
+        exists = await conn.fetchval(
+            "SELECT 1 FROM cluster_assignments WHERE public_cluster_id = $1 LIMIT 1;",
+            cluster_id,
+        )
+        if exists is None:
+            return None
+
+        started = time.monotonic()
+        try:
+            rows = await conn.fetch(
+                SELECT_TOPIC_GRAPH_ENTITY_MENTIONS_SQL,
+                cluster_id,
+                from_dt,
+                to_dt,
+            )
+            graph = build_topic_graph([dict(row) for row in rows])
+            analysis = analyze_topic_graph(graph["nodes"], graph["edges"])
+            payload = {
+                "cluster_id": cluster_id,
+                "window": {"from": _utc_iso(from_dt), "to": _utc_iso(to_dt)},
+                "algorithm_version": ALGO_VERSION,
+                "graph": graph,
+                **analysis,
+            }
+            await self._store_topic_graph_metrics_cache(conn, cache_key, cluster_id, from_dt, to_dt, payload)
+            GRAPH_ANALYTICS_RUNS_TOTAL.labels(status="success").inc()
+            return payload
+        except Exception:
+            GRAPH_ANALYTICS_RUNS_TOTAL.labels(status="error").inc()
+            logger.exception("topic graph analytics failed cluster_id=%s", cluster_id)
+            raise
+        finally:
+            GRAPH_ANALYTICS_DURATION.observe(time.monotonic() - started)
+
+    async def _load_topic_graph_metrics_cache(
+        self,
+        conn: asyncpg.Connection,
+        cache_key: str,
+    ) -> Optional[dict[str, Any]]:
+        try:
+            cached = await conn.fetchval(SELECT_GRAPH_SUBGRAPH_CACHE_SQL, cache_key)
+        except asyncpg.exceptions.UndefinedTableError:
+            logger.warning("graph analytics cache tables are not migrated yet")
+            return None
+        if cached is None:
+            return None
+        if isinstance(cached, str):
+            return json.loads(cached)
+        return dict(cached)
+
+    async def _store_topic_graph_metrics_cache(
+        self,
+        conn: asyncpg.Connection,
+        cache_key: str,
+        cluster_id: str,
+        from_dt: datetime,
+        to_dt: datetime,
+        payload: dict[str, Any],
+    ) -> None:
+        ttl_seconds = max(60, self._config.api.graph_metrics_cache_ttl_seconds)
+        interval = f"{ttl_seconds} seconds"
+        summary = payload["summary"]
+        try:
+            async with conn.transaction():
+                await conn.execute(
+                    UPSERT_GRAPH_SUBGRAPH_METRICS_SQL,
+                    cache_key,
+                    cluster_id,
+                    from_dt,
+                    to_dt,
+                    ALGO_VERSION,
+                    int(summary["node_count"]),
+                    int(summary["edge_count"]),
+                    json.dumps(payload),
+                    interval,
+                )
+                await conn.execute(DELETE_GRAPH_TOP_NODES_SQL, cache_key)
+                ranked_nodes = sorted(
+                    payload["nodes"],
+                    key=lambda item: (-item["pagerank"], -item["degree_centrality"], item["label"]),
+                )
+                for rank, node in enumerate(ranked_nodes, start=1):
+                    await conn.execute(
+                        INSERT_GRAPH_TOP_NODE_SQL,
+                        cache_key,
+                        node["id"],
+                        node["label"],
+                        node["type"],
+                        node["community_id"],
+                        float(node["degree_centrality"]),
+                        float(node["betweenness_centrality"]),
+                        float(node["pagerank"]),
+                        float(node["bridge_score"]),
+                        bool(node["is_bridge"]),
+                        rank,
+                    )
+                await conn.execute(DELETE_GRAPH_COMMUNITIES_SQL, cache_key)
+                for community in payload["communities"]:
+                    await conn.execute(
+                        INSERT_GRAPH_COMMUNITY_SQL,
+                        cache_key,
+                        int(community["community_id"]),
+                        int(community["node_count"]),
+                        int(community["edge_count"]),
+                        int(community["entity_count"]),
+                        int(community["channel_count"]),
+                        json.dumps(community),
+                    )
+        except asyncpg.exceptions.UndefinedTableError:
+            logger.warning("skipping graph analytics cache write because tables are not migrated")
+
+    def _graph_cache_key(self, cluster_id: str, from_dt: datetime, to_dt: datetime) -> str:
+        raw = "|".join(
+            [
+                ALGO_VERSION,
+                cluster_id,
+                _utc_iso(from_dt) or "",
+                _utc_iso(to_dt) or "",
+            ]
+        )
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def _parse_time_range(self, request: web.Request) -> tuple[datetime, datetime]:
         from_raw = request.query.get("from")

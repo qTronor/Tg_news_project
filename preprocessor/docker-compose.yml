@@ -18,8 +18,14 @@ services:
       PREPROCESSOR__POSTGRES__DATABASE: "${DB_NAME:-telegram_news}"
       PREPROCESSOR__POSTGRES__USER: "${DB_USER:-postgres}"
       PREPROCESSOR__POSTGRES__PASSWORD: "${DB_PASSWORD}"
+      PREPROCESSOR__LANGUAGE_DETECTION__ENABLED: "${MULTILINGUAL_MODE_ENABLED:-true}"
+      PREPROCESSOR__LANGUAGE_DETECTION__MIN_CONFIDENCE: "${LANGUAGE_DETECTION_MIN_CONFIDENCE:-0.55}"
+      PREPROCESSOR__LANGUAGE_DETECTION__BACKEND: "${LANGUAGE_DETECTION_BACKEND:-fasttext}"
+      PREPROCESSOR__LANGUAGE_DETECTION__FASTTEXT_MODEL_PATH: "/app/models/lid.176.bin"
+      PREPROCESSOR__LANGUAGE_DETECTION__AUTO_DOWNLOAD: "${LANGUAGE_DETECTION_AUTO_DOWNLOAD:-true}"
     volumes:
       - ./preprocessor/config.example.yaml:/app/preprocessor/config.yaml:ro
+      - preprocessor_model_cache:/app/models
     ports:
       - "8010:8010"
       - "8011:8011"
@@ -27,3 +33,11 @@ services:
     restart: unless-stopped
     networks:
       - telegram-news-network
+
+volumes:
+  preprocessor_model_cache:
+
+networks:
+  telegram-news-network:
+    external: true
+    name: tg_news_project_telegram-news-network
