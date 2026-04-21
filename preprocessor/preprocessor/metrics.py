@@ -18,3 +18,13 @@ PROCESSING_LATENCY = Histogram(
     "Message processing latency in seconds",
     buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10),
 )
+LANGUAGE_DETECTION_LATENCY = Histogram(
+    "preprocessor_language_detection_latency_seconds",
+    "Language detection latency in seconds",
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5),
+)
+MESSAGES_BY_LANGUAGE = Counter(
+    "preprocessor_messages_by_language_total",
+    "Messages processed by detected language and analysis mode",
+    ["language", "analysis_mode", "supported_for_full_analysis"],
+)

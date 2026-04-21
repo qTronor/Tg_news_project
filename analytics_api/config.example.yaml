@@ -18,6 +18,7 @@ api:
   max_documents_limit: 200
   default_graph_nodes: 30
   max_graph_nodes: 120
+  graph_metrics_cache_ttl_seconds: 900
 
 metrics:
   host: 0.0.0.0

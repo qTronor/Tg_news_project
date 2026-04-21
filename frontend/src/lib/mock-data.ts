@@ -282,6 +282,8 @@ export const mockTopics: Topic[] = [
 
 export function mockTopicDetail(id: ClusterId): TopicDetail {
   const topic = mockTopics.find((item) => item.cluster_id === id) || mockTopics[0];
+  const seed = clusterSeed(topic.cluster_id);
+  const firstSource = firstSourceForCluster(topic.cluster_id);
   return {
     ...topic,
     representative_messages: makeMessages(topic, 5),
@@ -300,9 +302,56 @@ export function mockTopicDetail(id: ClusterId): TopicDetail {
     },
     volume_timeline: Array.from({ length: 12 }, (_, index) => ({
       time: hoursAgo(12 - index),
-      count: 4 + index * 3,
+      count: seed === 2 ? 46 - index * 3 : 4 + index * 3,
     })),
-    first_source: firstSourceForCluster(topic.cluster_id),
+    first_source: firstSource,
+    summary:
+      seed === 1
+        ? "Fast-moving monetary policy discussion with broad channel pickup and an exact upstream source."
+        : seed === 2
+          ? "Political coalition story is cooling after an earlier peak, with source attribution inferred from quoted fragments."
+          : "Regulation discussion is still forming; source metadata and graph analytics are partially available.",
+    status: seed === 1 ? "growing" : seed === 2 ? "declining" : "new",
+    kpi_metrics: {
+      importance_score: seed === 1 ? 0.86 : seed === 2 ? 0.61 : null,
+      novelty_score: seed === 1 ? 0.72 : seed === 2 ? 0.28 : 0.67,
+      growth_rate: seed === 1 ? 0.34 : seed === 2 ? -0.16 : 0.18,
+    },
+    timeline_annotations:
+      seed === 3
+        ? []
+        : [
+            {
+              time: hoursAgo(7),
+              label: seed === 1 ? "Forward spike" : "Quote cascade",
+              description:
+                seed === 1
+                  ? "Exact forward metadata appeared across major channels."
+                  : "Several channels reused the same quoted formulation.",
+            },
+          ],
+    graph_analytics:
+      seed === 3
+        ? null
+        : {
+            node_count: seed === 1 ? 38 : 27,
+            edge_count: seed === 1 ? 74 : 41,
+            communities_count: seed === 1 ? 4 : 3,
+            bridge_nodes_count: seed === 1 ? 5 : 2,
+            density: seed === 1 ? 0.105 : 0.117,
+            top_central_entity: topic.top_entities[0],
+            top_central_channel: topic.channels[0],
+            summary:
+              seed === 1
+                ? "Dense cross-channel propagation around the policy source and two entity hubs."
+                : "Lower density network with a small number of channel bridges.",
+          },
+    source_provenance: {
+      first_seen: firstSource.display_source?.source_message_date || topic.first_seen,
+      first_source_channel: firstSource.display_source?.source_channel || null,
+      source_confidence: firstSource.display_source?.source_confidence ?? null,
+      propagation_count: firstSource.propagation_chain.length,
+    },
   };
 }
 

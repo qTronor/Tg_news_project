@@ -79,9 +79,35 @@
         },
         "language": {
           "type": "string",
-          "description": "Detected language code (ISO 639-1)",
-          "pattern": "^[a-z]{2}$",
-          "examples": ["ru", "en"]
+          "description": "Detected language code. Legacy alias for original_language.",
+          "pattern": "^([a-z]{2}|und|other)$",
+          "examples": ["ru", "en", "other", "und"]
+        },
+        "original_language": {
+          "type": "string",
+          "description": "Detected original message language. Uses ISO 639-1 when known, other for unsupported Latin text, and und when detection is unsafe.",
+          "pattern": "^([a-z]{2}|und|other)$",
+          "examples": ["ru", "en", "ar", "zh", "other", "und"]
+        },
+        "language_confidence": {
+          "type": "number",
+          "description": "Language detection confidence from 0 to 1",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "is_supported_for_full_analysis": {
+          "type": "boolean",
+          "description": "Whether this language should continue through full NER and sentiment analysis"
+        },
+        "analysis_mode": {
+          "type": "string",
+          "description": "Pipeline mode selected by language routing",
+          "enum": ["full", "partial", "unknown"]
+        },
+        "translation_status": {
+          "type": "string",
+          "description": "Placeholder for future asynchronous translation or summary service",
+          "enum": ["not_requested", "pending", "translated", "failed"]
         },
         "tokens": {
           "type": "array",

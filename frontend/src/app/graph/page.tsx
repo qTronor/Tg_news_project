@@ -12,7 +12,7 @@ import dynamic from "next/dynamic";
 function GraphViewLoading() {
   const { t } = useTranslation();
   return (
-    <div className="w-full h-full flex items-center justify-center text-muted-foreground">
+    <div className="flex h-full w-full items-center justify-center bg-[#1b1c2d] text-[#aeb5cf]">
       {t("graph.loadingGraph")}
     </div>
   );
@@ -52,16 +52,16 @@ function GraphContent() {
   } : { nodes: [], edges: [] };
 
   return (
-    <div className="p-6 h-[calc(100vh-4rem)] flex flex-col gap-4">
-      <div className="flex items-center gap-3 flex-wrap">
+    <div className="flex h-[calc(100vh-4rem)] flex-col gap-4 bg-[#171827] p-4 md:p-6">
+      <div className="flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[200px] max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#8f98b3]" />
           <input
             type="text"
             placeholder={t("graph.searchNode")}
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 bg-card border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-primary/30 transition-all"
+            className="w-full rounded-lg border border-white/10 bg-[#23243a] py-2 pl-9 pr-4 text-sm text-[#eef1ff] outline-none transition-all placeholder:text-[#8f98b3] focus:border-[#6f78ff] focus:ring-2 focus:ring-[#6f78ff]/25"
           />
         </div>
 
@@ -72,8 +72,8 @@ function GraphContent() {
               onClick={() => setMode(value)}
               className={`rounded-lg px-3 py-2 text-xs font-medium transition-all ${
                 mode === value
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground hover:text-foreground"
+                  ? "bg-[#6f78ff] text-white"
+                  : "bg-[#23243a] text-[#aeb5cf] hover:text-[#eef1ff]"
               }`}
             >
               {value === "overview" ? "Overview" : "Propagation"}
@@ -82,13 +82,13 @@ function GraphContent() {
         </div>
 
         <div className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">{t("graph.depth")}:</span>
+          <span className="text-[#aeb5cf]">{t("graph.depth")}:</span>
           {[1, 2, 3].map(d => (
             <button
               key={d}
               onClick={() => setDepth(d)}
               className={`w-8 h-8 rounded-lg text-xs font-medium transition-all ${
-                depth === d ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
+                depth === d ? "bg-[#6f78ff] text-white" : "bg-[#23243a] text-[#aeb5cf] hover:text-[#eef1ff]"
               }`}
             >
               {d}
@@ -108,24 +108,24 @@ function GraphContent() {
                 type="checkbox"
                 checked={f.value}
                 onChange={e => f.set(e.target.checked)}
-                className="rounded border-border text-primary focus:ring-primary/30"
+                className="rounded border-white/20 bg-[#23243a] text-[#6f78ff] focus:ring-[#6f78ff]/30"
               />
-              <span className="text-muted-foreground">{f.label}</span>
+              <span className="text-[#aeb5cf]">{f.label}</span>
             </label>
           ))}
         </div>
       </div>
 
       {mode === "propagation" && (
-        <div className="text-xs text-muted-foreground">
+        <div className="text-xs text-[#aeb5cf]">
           {clusterIdParam ? `Cluster focus: ${clusterIdParam}` : "Propagation mode requires a cluster focus."}
         </div>
       )}
 
-      <div className="flex-1 bg-card rounded-xl border border-border overflow-hidden">
+      <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-white/10 bg-[#1b1c2d]">
         {isLoading ? (
           <div className="w-full h-full flex items-center justify-center">
-            <Loader2 className="w-6 h-6 text-primary animate-spin" />
+            <Loader2 className="h-6 w-6 animate-spin text-[#6f78ff]" />
           </div>
         ) : (
           <GraphView data={filteredData} focusNodeId={focusParam} />

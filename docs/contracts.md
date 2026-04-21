@@ -1,5 +1,12 @@
 # Data Pipeline Contracts v1.0
 
+> Multilingual Variant C addendum (2026-04-20): `preprocessed.messages.payload`
+> now includes `original_language`, `language_confidence`,
+> `is_supported_for_full_analysis`, `analysis_mode`, and `translation_status`.
+> `ru`/`en` use full analytics, `other` uses partial mode with multilingual topic
+> clustering, and `und` uses unknown safe fallback. See
+> `docs/multilingual_processing_variant_c.md`.
+
 **Дата:** 2026-01-31  
 **Архитектура:** Event-Driven, At-Least-Once Delivery  
 **Идемпотентность:** Обязательна на всех уровнях  

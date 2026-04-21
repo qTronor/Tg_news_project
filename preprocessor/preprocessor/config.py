@@ -67,6 +67,17 @@ class PreprocessingConfig(BaseModel):
     version: str = "1.0.0"
 
 
+class LanguageDetectionConfig(BaseModel):
+    enabled: bool = True
+    min_confidence: float = 0.55
+    full_analysis_languages: List[str] = ["ru", "en"]
+    unsupported_analysis_mode: str = "partial"
+    unknown_analysis_mode: str = "unknown"
+    backend: str = "fasttext"
+    fasttext_model_path: Path = Path("/app/models/lid.176.bin")
+    auto_download: bool = True
+
+
 class LoggingConfig(BaseModel):
     level: str = "INFO"
 
@@ -83,6 +94,7 @@ class AppConfig(BaseModel):
     health: HealthConfig = HealthConfig()
     schemas: SchemaConfig = SchemaConfig()
     preprocessing: PreprocessingConfig = PreprocessingConfig()
+    language_detection: LanguageDetectionConfig = LanguageDetectionConfig()
     logging: LoggingConfig = LoggingConfig()
 
 
@@ -104,6 +116,7 @@ class EnvConfig(BaseSettings):
     health: Optional[HealthConfig] = None
     schemas: Optional[SchemaConfig] = None
     preprocessing: Optional[PreprocessingConfig] = None
+    language_detection: Optional[LanguageDetectionConfig] = None
     logging: Optional[LoggingConfig] = None
 
 

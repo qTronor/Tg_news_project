@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "preprocessor"))
 
-from preprocessor.text_processing import fingerprint_url, normalize_url, preprocess_text
+from preprocessor.text_processing import detect_language, fingerprint_url, normalize_url, preprocess_text
 
 
 class PreprocessorFingerprintTest(unittest.TestCase):
@@ -27,3 +27,25 @@ class PreprocessorFingerprintTest(unittest.TestCase):
         self.assertIsNotNone(result.simhash64)
         self.assertTrue(result.url_fingerprints)
         self.assertEqual(result.primary_url_fingerprint, result.url_fingerprints[0])
+
+    def test_language_detection_routes_ru_and_en_to_full_mode(self) -> None:
+        ru = detect_language("Центробанк повысил ключевую ставку")
+        en = detect_language("The central bank raised the interest rate")
+
+        self.assertEqual(ru.language, "ru")
+        self.assertEqual(ru.analysis_mode, "full")
+        self.assertTrue(ru.is_supported_for_full_analysis)
+        self.assertEqual(en.language, "en")
+        self.assertEqual(en.analysis_mode, "full")
+        self.assertTrue(en.is_supported_for_full_analysis)
+
+    def test_language_detection_routes_other_and_unknown_safely(self) -> None:
+        other = detect_language("El banco central subio la tasa")
+        unknown = detect_language("12345 !!!")
+
+        self.assertEqual(other.language, "other")
+        self.assertEqual(other.analysis_mode, "partial")
+        self.assertFalse(other.is_supported_for_full_analysis)
+        self.assertEqual(unknown.language, "und")
+        self.assertEqual(unknown.analysis_mode, "unknown")
+        self.assertFalse(unknown.is_supported_for_full_analysis)

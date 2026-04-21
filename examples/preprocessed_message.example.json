@@ -12,6 +12,11 @@
     "cleaned_text": "центробанк повысил ключевую ставку до 18% на фоне роста инфляции решение было принято на заседании совета директоров цб рф",
     "normalized_text": "центробанк повысить ключевой ставка до 18% на фон рост инфляция решение быть принять на заседание совет директор цб рф",
     "language": "ru",
+    "original_language": "ru",
+    "language_confidence": 1.0,
+    "is_supported_for_full_analysis": true,
+    "analysis_mode": "full",
+    "translation_status": "not_requested",
     "tokens": [
       "центробанк",
       "повысил",

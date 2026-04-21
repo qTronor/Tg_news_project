@@ -163,6 +163,9 @@ class MessageContext:
     message_id: int
     channel: str
     original_text: str
+    original_language: str
+    analysis_mode: str
+    is_supported_for_full_analysis: bool
     payload: dict
     key: str
     topic: str
@@ -409,7 +412,7 @@ class SentimentAnalyzerService:
 
     async def _handle_metrics(self, request: web.Request) -> web.Response:
         return web.Response(
-            body=generate_latest(), content_type=CONTENT_TYPE_LATEST
+            body=generate_latest(), headers={"Content-Type": CONTENT_TYPE_LATEST}
         )
 
     # ── record handling ─────────────────────────────────────────────
@@ -535,6 +538,15 @@ class SentimentAnalyzerService:
         message_id = payload["payload"]["message_id"]
         channel = payload["payload"]["channel"]
         original_text = payload["payload"].get("original_text", "")
+        original_language = payload["payload"].get(
+            "original_language",
+            payload["payload"].get("language", "und"),
+        )
+        analysis_mode = payload["payload"].get("analysis_mode", "full")
+        is_supported_for_full_analysis = payload["payload"].get(
+            "is_supported_for_full_analysis",
+            original_language in {"ru", "en"},
+        )
 
         try:
             event_timestamp_dt = parse_iso_datetime(event_timestamp)
@@ -573,6 +585,9 @@ class SentimentAnalyzerService:
             message_id=message_id,
             channel=channel,
             original_text=original_text,
+            original_language=original_language,
+            analysis_mode=analysis_mode,
+            is_supported_for_full_analysis=bool(is_supported_for_full_analysis),
             payload=payload,
             key=key,
             topic=record.topic,
@@ -609,6 +624,23 @@ class SentimentAnalyzerService:
                         f"channel={context.channel} message_id={context.message_id}",
                         reason="missing_upstream",
                     )
+
+                if (
+                    context.analysis_mode != "full"
+                    or not context.is_supported_for_full_analysis
+                ):
+                    logger.info(
+                        "skipping sentiment for event_id=%s language=%s analysis_mode=%s",
+                        context.event_id,
+                        context.original_language,
+                        context.analysis_mode,
+                    )
+                    await conn.execute(
+                        UPDATE_PROCESSED_COMPLETED_SQL,
+                        context.processing_event_id,
+                    )
+                    MESSAGES_PROCESSED.labels(status="skipped_unsupported").inc()
+                    return ProcessingOutcome.SUCCESS
 
                 result = await self._analyze_sentiment(context.original_text)
                 processing_time_ms = (

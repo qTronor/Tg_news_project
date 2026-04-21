@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import hashlib
 import re
 from collections import Counter
-from typing import List, Optional
+from typing import Iterable, List, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
@@ -31,7 +31,45 @@ PUNCTUATION_PATTERN = re.compile(r"[^\w\s%]", flags=re.UNICODE)
 WHITESPACE_PATTERN = re.compile(r"\s+", flags=re.UNICODE)
 CYRILLIC_PATTERN = re.compile(r"[\u0400-\u04FF]")
 LATIN_PATTERN = re.compile(r"[A-Za-z]")
+LETTER_PATTERN = re.compile(r"[^\W\d_]", flags=re.UNICODE)
 SENTENCE_SPLIT_PATTERN = re.compile(r"[.!?]+")
+ARABIC_PATTERN = re.compile(r"[\u0600-\u06FF]")
+CJK_PATTERN = re.compile(r"[\u3400-\u9FFF]")
+HEBREW_PATTERN = re.compile(r"[\u0590-\u05FF]")
+EN_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "bank",
+    "be",
+    "by",
+    "central",
+    "for",
+    "from",
+    "has",
+    "have",
+    "in",
+    "inflation",
+    "interest",
+    "is",
+    "market",
+    "news",
+    "of",
+    "on",
+    "rate",
+    "rates",
+    "said",
+    "says",
+    "stock",
+    "that",
+    "the",
+    "to",
+    "was",
+    "with",
+}
 TRACKING_QUERY_KEYS = {
     "fbclid",
     "gclid",
@@ -52,6 +90,14 @@ TRACKING_QUERY_KEYS = {
 
 
 @dataclass
+class LanguageDetectionResult:
+    language: str
+    confidence: float
+    is_supported_for_full_analysis: bool
+    analysis_mode: str
+
+
+@dataclass
 class PreprocessResult:
     cleaned_text: str
     normalized_text: str
@@ -65,6 +111,11 @@ class PreprocessResult:
     mentions: List[str]
     hashtags: List[str]
     language: str
+    original_language: str
+    language_confidence: float
+    is_supported_for_full_analysis: bool
+    analysis_mode: str
+    translation_status: str
     normalized_text_hash: Optional[str]
     simhash64: Optional[int]
     url_fingerprints: List[str]
@@ -80,12 +131,103 @@ def _clean_entities(items: List[str]) -> List[str]:
     return cleaned
 
 
-def detect_language(text: str) -> str:
-    if CYRILLIC_PATTERN.search(text):
-        return "ru"
-    if LATIN_PATTERN.search(text):
-        return "en"
-    return "ru"
+def _route_language(
+    language: str,
+    confidence: float,
+    full_analysis_languages: Iterable[str],
+) -> LanguageDetectionResult:
+    supported = language in set(full_analysis_languages)
+    if language == "und":
+        mode = "unknown"
+    elif supported:
+        mode = "full"
+    else:
+        mode = "partial"
+    return LanguageDetectionResult(language, round(confidence, 3), supported, mode)
+
+
+def _heuristic_detect_raw(text: str, min_confidence: float) -> tuple[str, float]:
+    """Unicode-script + EN-stopword heuristic returning raw (lang, confidence).
+
+    Kept public-ish (module-level underscore prefix) so the language_detection
+    module can reuse it as its heuristic backend without re-duplicating the
+    regex pyramid.
+    """
+
+    raw_text = text or ""
+    letters = LETTER_PATTERN.findall(raw_text)
+    if not letters:
+        return "und", 0.0
+
+    total = len(letters)
+    cyrillic = len(CYRILLIC_PATTERN.findall(raw_text))
+    latin = len(LATIN_PATTERN.findall(raw_text))
+    arabic = len(ARABIC_PATTERN.findall(raw_text))
+    cjk = len(CJK_PATTERN.findall(raw_text))
+    hebrew = len(HEBREW_PATTERN.findall(raw_text))
+    script_counts = {
+        "ru": cyrillic,
+        "latin": latin,
+        "ar": arabic,
+        "zh": cjk,
+        "he": hebrew,
+    }
+    script, count = max(script_counts.items(), key=lambda item: item[1])
+    script_confidence = count / total if total else 0.0
+
+    if script == "ru" and script_confidence >= min_confidence:
+        return "ru", script_confidence
+
+    if script == "latin" and script_confidence >= min_confidence:
+        words = re.findall(r"[A-Za-z]{2,}", raw_text.lower())
+        if not words:
+            return "und", round(script_confidence, 3)
+        stopword_hits = sum(1 for word in words if word in EN_STOPWORDS)
+        english_confidence = max(
+            script_confidence * min(1.0, stopword_hits / 2),
+            0.5 if stopword_hits else 0.0,
+        )
+        if english_confidence >= min_confidence:
+            return "en", english_confidence
+        return "other", script_confidence
+
+    if count > 0 and script_confidence >= min_confidence:
+        return script, script_confidence
+
+    return "und", round(script_confidence, 3)
+
+
+_active_detector = None
+
+
+def configure_detector(detector) -> None:
+    """Install a process-wide language detector used by :func:`detect_language`.
+
+    Called once from the service bootstrap so that the rest of the code path
+    (notably :func:`preprocess_text`) doesn't need a detector argument
+    threaded through every call site.
+    """
+
+    global _active_detector
+    _active_detector = detector
+
+
+def detect_language(
+    text: str,
+    min_confidence: float = 0.55,
+    full_analysis_languages: Iterable[str] = ("ru", "en"),
+) -> LanguageDetectionResult:
+    detector = _active_detector
+    if detector is None:
+        lang, conf = _heuristic_detect_raw(text or "", min_confidence)
+    else:
+        outcome = detector.detect(text or "")
+        lang, conf = outcome.language, outcome.confidence
+        # fastText can be confident about a short string that's just an emoji
+        # or number — trust the raw confidence but downgrade under threshold.
+        if conf < min_confidence and lang not in {"und"}:
+            return _route_language("und", conf, full_analysis_languages)
+    return _route_language(lang, conf, full_analysis_languages)
 
 
 def count_sentences(text: str) -> int:
@@ -137,7 +279,8 @@ def fingerprint_text(text: Optional[str]) -> Optional[str]:
 
 
 def fingerprint_url(url: str) -> str:
-    return hashlib.sha256(url.encode("utf-8")).hexdigest()
+    normalized = normalize_url(url) or url
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def _stable_u64(value: str) -> int:
@@ -183,8 +326,17 @@ def fingerprint_urls(urls: List[str]) -> tuple[List[str], Optional[str]]:
     return fingerprints, primary
 
 
-def preprocess_text(text: Optional[str]) -> PreprocessResult:
+def preprocess_text(
+    text: Optional[str],
+    language_min_confidence: float = 0.55,
+    full_analysis_languages: Iterable[str] = ("ru", "en"),
+) -> PreprocessResult:
     raw_text = text or ""
+    language = detect_language(
+        raw_text,
+        min_confidence=language_min_confidence,
+        full_analysis_languages=full_analysis_languages,
+    )
     urls = _clean_entities(URL_PATTERN.findall(raw_text))
     mentions = _clean_entities(MENTION_PATTERN.findall(raw_text))
     hashtags = _clean_entities(HASHTAG_PATTERN.findall(raw_text))
@@ -213,7 +365,12 @@ def preprocess_text(text: Optional[str]) -> PreprocessResult:
         urls=urls,
         mentions=mentions,
         hashtags=hashtags,
-        language=detect_language(raw_text),
+        language=language.language,
+        original_language=language.language,
+        language_confidence=language.confidence,
+        is_supported_for_full_analysis=language.is_supported_for_full_analysis,
+        analysis_mode=language.analysis_mode,
+        translation_status="not_requested",
         normalized_text_hash=fingerprint_text(stripped),
         simhash64=compute_simhash64(tokens),
         url_fingerprints=url_fingerprints,

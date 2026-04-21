@@ -6,6 +6,20 @@ event_version: "v1.0.0"
 preprocessing:
   version: "1.0.0"
 
+language_detection:
+  enabled: true
+  min_confidence: 0.55
+  full_analysis_languages:
+    - "ru"
+    - "en"
+  unsupported_analysis_mode: "partial"
+  unknown_analysis_mode: "unknown"
+  # Backend: "fasttext" (primary, uses lid.176.bin) or "heuristic" (offline-safe fallback).
+  # On any runtime error, fasttext transparently falls back to the heuristic.
+  backend: "fasttext"
+  fasttext_model_path: "/app/models/lid.176.bin"
+  auto_download: true
+
 kafka:
   bootstrap_servers: "localhost:9092"
   input_topics:

@@ -18,13 +18,16 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from preprocessor.config import AppConfig
 from preprocessor.metrics import (
+    LANGUAGE_DETECTION_LATENCY,
+    MESSAGES_BY_LANGUAGE,
     MESSAGES_CONSUMED,
     MESSAGES_DLQ,
     MESSAGES_PROCESSED,
     PROCESSING_LATENCY,
 )
+from preprocessor.language_detection import build_detector
 from preprocessor.schemas import JsonSchemaValidator, SchemaValidationError
-from preprocessor.text_processing import preprocess_text
+from preprocessor.text_processing import configure_detector, preprocess_text
 from preprocessor.utils import (
     decode_kafka_key,
     parse_iso_datetime,
@@ -121,6 +124,11 @@ INSERT INTO preprocessed_messages (
     cleaned_text,
     normalized_text,
     language,
+    original_language,
+    language_confidence,
+    is_supported_for_full_analysis,
+    analysis_mode,
+    translation_status,
     tokens,
     sentences_count,
     word_count,
@@ -142,7 +150,7 @@ INSERT INTO preprocessed_messages (
 VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
     $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
-    $22, $23, $24, $25
+    $22, $23, $24, $25, $26, $27, $28, $29, $30
 )
 ON CONFLICT (channel, message_id) DO NOTHING
 RETURNING id;
@@ -217,6 +225,45 @@ class PreprocessorService:
         self._web_runner: Optional[web.AppRunner] = None
         self._health_site: Optional[web.TCPSite] = None
         self._metrics_site: Optional[web.TCPSite] = None
+        self._detector_backend = self._install_language_detector()
+
+    def _install_language_detector(self) -> str:
+        """Build and install the process-wide language detector.
+
+        Separated so that a detector-construction failure is logged with
+        context and the preprocessor can still start with the heuristic
+        fallback (no hard crash on e.g. a temporary download failure).
+        """
+
+        cfg = self._config.language_detection
+        try:
+            detector = build_detector(
+                backend=cfg.backend,
+                min_confidence=cfg.min_confidence,
+                fasttext_model_path=cfg.fasttext_model_path,
+                auto_download=cfg.auto_download,
+            )
+        except Exception as exc:  # noqa: BLE001 — degrade to heuristic rather than crash at import
+            logger.warning(
+                "failed to build language detector backend=%s, using heuristic: %s",
+                cfg.backend,
+                exc,
+            )
+            detector = build_detector(
+                backend="heuristic",
+                min_confidence=cfg.min_confidence,
+                fasttext_model_path=None,
+                auto_download=False,
+            )
+        configure_detector(detector)
+        backend_name = getattr(detector, "name", "heuristic")
+        logger.info(
+            "language detector installed backend=%s min_confidence=%.2f full_langs=%s",
+            backend_name,
+            cfg.min_confidence,
+            cfg.full_analysis_languages,
+        )
+        return backend_name
 
     async def start(self) -> None:
         await self._start_db()
@@ -321,12 +368,19 @@ class PreprocessorService:
             "postgres_connected": self._health.postgres_connected,
             "last_processed_at": self._health.last_processed_at,
             "last_error": self._health.last_error,
+            "language_detection": {
+                "backend": self._detector_backend,
+                "min_confidence": self._config.language_detection.min_confidence,
+                "full_analysis_languages": list(
+                    self._config.language_detection.full_analysis_languages
+                ),
+            },
         }
         return web.json_response(payload)
 
     async def _handle_metrics(self, request: web.Request) -> web.Response:
         return web.Response(
-            body=generate_latest(), content_type=CONTENT_TYPE_LATEST
+            body=generate_latest(), headers={"Content-Type": CONTENT_TYPE_LATEST}
         )
 
     async def _handle_record(self, record) -> None:
@@ -555,7 +609,34 @@ class PreprocessorService:
                     conn, context
                 )
                 original_text = raw_text or ""
-                result = preprocess_text(original_text)
+                language_start = time.monotonic()
+                result = preprocess_text(
+                    original_text,
+                    language_min_confidence=self._config.language_detection.min_confidence,
+                    full_analysis_languages=(
+                        self._config.language_detection.full_analysis_languages
+                    ),
+                )
+                if not self._config.language_detection.enabled:
+                    result.is_supported_for_full_analysis = True
+                    result.analysis_mode = "full"
+                LANGUAGE_DETECTION_LATENCY.observe(time.monotonic() - language_start)
+                MESSAGES_BY_LANGUAGE.labels(
+                    language=result.original_language,
+                    analysis_mode=result.analysis_mode,
+                    supported_for_full_analysis=str(
+                        result.is_supported_for_full_analysis
+                    ).lower(),
+                ).inc()
+                logger.info(
+                    "language detected event_id=%s language=%s confidence=%.3f "
+                    "analysis_mode=%s full_supported=%s",
+                    context.event_id,
+                    result.original_language,
+                    result.language_confidence,
+                    result.analysis_mode,
+                    result.is_supported_for_full_analysis,
+                )
                 processing_time_ms = (time.monotonic() - processing_started) * 1000.0
 
                 row_id = await conn.fetchval(
@@ -568,6 +649,11 @@ class PreprocessorService:
                     result.cleaned_text,
                     result.normalized_text,
                     result.language,
+                    result.original_language,
+                    result.language_confidence,
+                    result.is_supported_for_full_analysis,
+                    result.analysis_mode,
+                    result.translation_status,
                     result.tokens,
                     result.sentences_count,
                     result.word_count,
@@ -706,6 +792,13 @@ class PreprocessorService:
                 "cleaned_text": result.cleaned_text,
                 "normalized_text": result.normalized_text,
                 "language": result.language,
+                "original_language": result.original_language,
+                "language_confidence": result.language_confidence,
+                "is_supported_for_full_analysis": (
+                    result.is_supported_for_full_analysis
+                ),
+                "analysis_mode": result.analysis_mode,
+                "translation_status": result.translation_status,
                 "tokens": result.tokens,
                 "sentences_count": result.sentences_count,
                 "word_count": result.word_count,
