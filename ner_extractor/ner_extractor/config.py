@@ -65,7 +65,38 @@ class LoggingConfig(BaseModel):
     level: str = "INFO"
 
 
+class NatashaModelConfig(BaseModel):
+    """Config for the Natasha (RU) NER backend."""
+
+    version: str = "1.0.0"
+    confidence: float = 0.8
+    min_entity_length: int = 3
+
+
+class TransformersModelConfig(BaseModel):
+    """Config for the transformers (EN) NER backend."""
+
+    name: str = "dslim/bert-base-NER"
+    version: str = "1.0.0"
+    device: str = "auto"
+    batch_size: int = 8
+    min_entity_length: int = 2
+    confidence_threshold: float = 0.80
+    cache_dir: Optional[str] = None
+    enabled: bool = True
+
+
+class ModelsConfig(BaseModel):
+    """Per-language NER model config."""
+
+    ru: NatashaModelConfig = NatashaModelConfig()
+    en: TransformersModelConfig = TransformersModelConfig()
+
+
+# Backward-compat alias
 class ModelConfig(BaseModel):
+    """Legacy flat model config. Kept so old YAML doesn't crash on load."""
+
     confidence: float = 0.8
     min_entity_length: int = 3
     version: str = "1.0.0"
@@ -83,7 +114,7 @@ class AppConfig(BaseModel):
     health: HealthConfig = HealthConfig()
     schemas: SchemaConfig = SchemaConfig()
     logging: LoggingConfig = LoggingConfig()
-    model: ModelConfig = ModelConfig()
+    models: ModelsConfig = ModelsConfig()
 
 
 class EnvConfig(BaseSettings):
@@ -104,7 +135,7 @@ class EnvConfig(BaseSettings):
     health: Optional[HealthConfig] = None
     schemas: Optional[SchemaConfig] = None
     logging: Optional[LoggingConfig] = None
-    model: Optional[ModelConfig] = None
+    models: Optional[ModelsConfig] = None
 
 
 def _deep_update(base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -116,10 +147,25 @@ def _deep_update(base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any
     return base
 
 
+def _migrate_legacy_model_key(data: Dict[str, Any]) -> Dict[str, Any]:
+    """If YAML has the old flat ``model:`` key, promote it into ``models.ru``."""
+    if "model" in data and "models" not in data:
+        old = data.pop("model")
+        data["models"] = {
+            "ru": {
+                "version": old.get("version", "1.0.0"),
+                "confidence": old.get("confidence", 0.8),
+                "min_entity_length": old.get("min_entity_length", 3),
+            }
+        }
+    return data
+
+
 def load_config(path: Path) -> AppConfig:
     data: Dict[str, Any] = {}
     if path and path.exists():
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    data = _migrate_legacy_model_key(data)
     file_config = AppConfig.model_validate(data)
     env_config = EnvConfig().model_dump(exclude_none=True)
     merged = _deep_update(file_config.model_dump(), env_config)

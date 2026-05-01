@@ -28,6 +28,32 @@ class PreprocessorFingerprintTest(unittest.TestCase):
         self.assertTrue(result.url_fingerprints)
         self.assertEqual(result.primary_url_fingerprint, result.url_fingerprints[0])
 
+    def test_preprocess_text_removes_telegram_boilerplate_and_emoji(self) -> None:
+        text = (
+            "ЦБ повысил ключевую ставку до 18%.\n\n"
+            "🔥 Подписывайтесь на @banksta\n"
+            "Канал РБК в MAX\n"
+            "▪Приложение РБК для iOS и Android\n"
+            "https://t.me/rbc_news"
+        )
+
+        result = preprocess_text(text)
+
+        self.assertEqual(result.cleaned_text, "цб повысил ключевую ставку до 18%")
+        self.assertFalse(result.has_urls)
+        self.assertFalse(result.has_mentions)
+
+    def test_preprocess_text_keeps_media_caption_text(self) -> None:
+        text = "Фото дня: индекс Мосбиржи вырос на 2% 📈"
+
+        result = preprocess_text(text)
+
+        self.assertEqual(
+            result.cleaned_text,
+            "фото дня индекс мосбиржи вырос на 2%",
+        )
+        self.assertGreater(result.word_count, 0)
+
     def test_language_detection_routes_ru_and_en_to_full_mode(self) -> None:
         ru = detect_language("Центробанк повысил ключевую ставку")
         en = detect_language("The central bank raised the interest rate")

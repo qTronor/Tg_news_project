@@ -1,0 +1,74 @@
+version: "3.8"
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: telegram-news-zookeeper-remote
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: telegram-news-kafka-remote
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9093,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    restart: unless-stopped
+
+  telegram-collector:
+    build: ./rbc_telegram_collector
+    container_name: telegram-news-collector-remote
+    command: ["service", "--config", "config.yaml"]
+    depends_on:
+      - kafka
+    environment:
+      TG_API_ID: ${TG_API_ID:?Telegram API ID required}
+      TG_API_HASH: ${TG_API_HASH:?Telegram API hash required}
+      TG_STRING_SESSION: ${TG_STRING_SESSION:?Telegram string session required}
+      TG_PROXY_ENABLED: ${TG_PROXY_ENABLED:-false}
+      TG_PROXY_SCHEME: ${TG_PROXY_SCHEME:-socks5}
+      TG_PROXY_HOST: ${TG_PROXY_HOST:-}
+      TG_PROXY_PORT: ${TG_PROXY_PORT:-}
+      TG_PROXY_USERNAME: ${TG_PROXY_USERNAME:-}
+      TG_PROXY_PASSWORD: ${TG_PROXY_PASSWORD:-}
+      TG_PROXY_RDNS: ${TG_PROXY_RDNS:-true}
+      COLLECTOR_KAFKA_BOOTSTRAP_SERVERS: kafka:9093
+    volumes:
+      - ./rbc_telegram_collector/config.remote-server.yaml:/app/config.yaml:ro
+      - ./rbc_telegram_collector/data:/app/data
+      - ./rbc_telegram_collector/state:/app/state
+    restart: unless-stopped
+
+  message-persister:
+    build:
+      context: .
+      dockerfile: message_persister/Dockerfile
+    container_name: telegram-news-message-persister-remote
+    depends_on:
+      - kafka
+    network_mode: host
+    environment:
+      MESSAGE_PERSISTER__KAFKA__BOOTSTRAP_SERVERS: 127.0.0.1:9092
+      MESSAGE_PERSISTER__POSTGRES__HOST: 127.0.0.1
+      MESSAGE_PERSISTER__POSTGRES__PORT: ${REMOTE_TUNNEL_DB_PORT:-15432}
+      MESSAGE_PERSISTER__POSTGRES__DATABASE: ${DB_NAME:-telegram_news}
+      MESSAGE_PERSISTER__POSTGRES__USER: ${DB_USER:-postgres}
+      MESSAGE_PERSISTER__POSTGRES__PASSWORD: ${DB_PASSWORD:?Database password required}
+    volumes:
+      - ./message_persister/config.yaml:/app/message_persister/config.yaml:ro
+    command: ["python", "/app/message_persister/main.py", "--config", "/app/message_persister/config.yaml"]
+    restart: unless-stopped

@@ -4,10 +4,12 @@ import { useRef, useEffect, useCallback, useState } from "react";
 import cytoscape, { type Core, type EventObject } from "cytoscape";
 import type { GraphData, GraphNode } from "@/types";
 import { motion, AnimatePresence } from "framer-motion";
-import { Maximize2, Minus, Plus, RotateCcw, X } from "lucide-react";
+import { CalendarClock, ExternalLink, Maximize2, Minus, Plus, RotateCcw, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { SourceStatusBadge } from "@/components/topics/source-status-badge";
+import { useDemoContext } from "@/components/providers";
 import type { SourceStatus } from "@/types";
+import Link from "next/link";
 
 interface Props {
   data: GraphData;
@@ -40,9 +42,35 @@ function sourceStatusColor(status?: SourceStatus): string | null {
   }
 }
 
-function nodeSize(weight?: number): number {
+function nodeSize(type: string, weight?: number): number {
   const safeWeight = Number.isFinite(weight) && weight ? weight : 1;
+  if (type === "message") {
+    return Math.max(8, Math.min(15, 7 + Math.sqrt(safeWeight) * 2.1));
+  }
   return Math.max(11, Math.min(34, 9 + Math.sqrt(safeWeight) * 2.8));
+}
+
+function formatMessageDate(value?: string): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function sourceGraphHref(node: GraphNode): string | null {
+  if (!node.source_event_id || !node.cluster_id) return null;
+  const params = new URLSearchParams({
+    mode: "propagation",
+    clusterId: node.cluster_id,
+    focus: `msg-${node.source_event_id}`,
+  });
+  return `/graph?${params.toString()}`;
 }
 
 function sameCommunity(edge: cytoscape.EdgeSingular): boolean {
@@ -98,6 +126,7 @@ const settleLayout: cytoscape.CoseLayoutOptions = {
 };
 
 export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
+  const { setIsDemo } = useDemoContext();
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
   const dragPullRef = useRef<Map<string, { position: cytoscape.Position; strength: number }>>(new Map());
@@ -155,7 +184,11 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
           channel: n.channel,
           messageId: n.message_id,
           messageDate: n.message_date,
+          clusterId: n.cluster_id,
+          permalink: n.permalink,
           sourceStatus: n.source_status,
+          sourceEventId: n.source_event_id,
+          sourceChannel: n.source_channel,
         },
       })),
       ...data.edges
@@ -192,8 +225,8 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
             "text-margin-y": 7,
             "background-color": (ele: cytoscape.NodeSingular) => nodeColor(ele.data("nodeType")),
             shape: "ellipse",
-            width: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("weight")),
-            height: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("weight")),
+            width: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("nodeType"), ele.data("weight")),
+            height: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("nodeType"), ele.data("weight")),
             "border-width": 0.75,
             "border-color": (ele: cytoscape.NodeSingular) =>
               sourceStatusColor(ele.data("sourceStatus")) || nodeColor(ele.data("nodeType")),
@@ -217,8 +250,8 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
         {
           selector: "node:selected",
           style: {
-            width: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("weight")) + 6,
-            height: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("weight")) + 6,
+            width: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("nodeType"), ele.data("weight")) + 5,
+            height: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("nodeType"), ele.data("weight")) + 5,
           },
         },
         {
@@ -356,7 +389,11 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
         channel: node.data("channel"),
         message_id: node.data("messageId"),
         message_date: node.data("messageDate"),
+        cluster_id: node.data("clusterId"),
+        permalink: node.data("permalink"),
         source_status: node.data("sourceStatus"),
+        source_event_id: node.data("sourceEventId"),
+        source_channel: node.data("sourceChannel"),
       };
       setSelectedNode(nodeData);
       onNodeClick?.(nodeData);
@@ -398,7 +435,11 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
             channel: focusNode.data("channel"),
             message_id: focusNode.data("messageId"),
             message_date: focusNode.data("messageDate"),
+            cluster_id: focusNode.data("clusterId"),
+            permalink: focusNode.data("permalink"),
             source_status: focusNode.data("sourceStatus"),
+            source_event_id: focusNode.data("sourceEventId"),
+            source_channel: focusNode.data("sourceChannel"),
           });
         }, 1000);
       }
@@ -494,6 +535,31 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
                 <X className="w-4 h-4" />
               </button>
             </div>
+            {selectedNode.type === "message" && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {sourceGraphHref(selectedNode) && (
+                  <Link
+                    href={sourceGraphHref(selectedNode)!}
+                    onClick={() => setIsDemo(false)}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-[#6f78ff] px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[#8289ff]"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Первоисточник
+                  </Link>
+                )}
+                {selectedNode.permalink && (
+                  <a
+                    href={selectedNode.permalink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-white/10 px-2.5 py-1.5 text-xs font-medium text-[#d9ddef] transition-colors hover:bg-white/10 hover:text-white"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Telegram
+                  </a>
+                )}
+              </div>
+            )}
             <div className="mt-3 space-y-1.5 text-xs text-[#aeb5cf]">
               <div className="flex justify-between">
                 <span>Weight</span>
@@ -515,6 +581,23 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
                 <div className="flex justify-between">
                   <span>Message</span>
                   <span className="font-medium text-[#f5f7ff]">#{selectedNode.message_id}</span>
+                </div>
+              )}
+              {selectedNode.message_date && (
+                <div className="flex items-center justify-between gap-3">
+                  <span className="inline-flex items-center gap-1">
+                    <CalendarClock className="h-3.5 w-3.5" />
+                    Published
+                  </span>
+                  <span className="text-right font-medium text-[#f5f7ff]">
+                    {formatMessageDate(selectedNode.message_date)}
+                  </span>
+                </div>
+              )}
+              {selectedNode.source_channel && (
+                <div className="flex justify-between">
+                  <span>First source</span>
+                  <span className="font-medium text-[#f5f7ff]">{selectedNode.source_channel}</span>
                 </div>
               )}
               {"source_status" in selectedNode && selectedNode.source_status && (

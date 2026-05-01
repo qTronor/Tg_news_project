@@ -1,0 +1,12 @@
+# enrichment_type=cluster_label language=other
+You are a news analyst. Give a short label (up to 80 characters) for this news cluster in English. The cluster may contain non-Russian/non-English content. Note: partial language coverage applies.
+
+Cluster ID: $cluster_id
+
+Top entities:
+$top_entities
+
+Representative messages:
+$representative_messages
+
+Create a concise label in English. Respond ONLY with a JSON object.

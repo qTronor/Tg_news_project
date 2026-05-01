@@ -7,6 +7,7 @@ import type {
   OverviewStats,
   SentimentPoint,
   Topic,
+  TopicComparisonResult,
   TopicDetail,
 } from "@/types";
 
@@ -352,6 +353,175 @@ export function mockTopicDetail(id: ClusterId): TopicDetail {
       source_confidence: firstSource.display_source?.source_confidence ?? null,
       propagation_count: firstSource.propagation_chain.length,
     },
+  };
+}
+
+export function mockTopicComparison(
+  clusterAId: ClusterId,
+  clusterBId: ClusterId,
+  from: string,
+  to: string
+): TopicComparisonResult {
+  const a = mockTopics.find((item) => item.cluster_id === clusterAId) || mockTopics[0];
+  const b = mockTopics.find((item) => item.cluster_id === clusterBId) || mockTopics[1] || mockTopics[0];
+  const sharedEntities = a.top_entities
+    .filter((entity) => b.top_entities.some((other) => other.text === entity.text || other.type === entity.type))
+    .slice(0, 3)
+    .map((entity) => ({
+      id: entity.id,
+      text: entity.text,
+      type: entity.type,
+      a_mentions: entity.mention_count || 1,
+      b_mentions: Math.max(1, Math.round((entity.mention_count || 1) * 0.62)),
+      min_mentions: Math.max(1, Math.round((entity.mention_count || 1) * 0.62)),
+    }));
+  const sharedChannels = a.channels
+    .filter((channel) => b.channels.some((other) => other.channel === channel.channel))
+    .slice(0, 3)
+    .map((channel) => {
+      const other = b.channels.find((item) => item.channel === channel.channel);
+      return {
+        channel: channel.channel,
+        a_count: channel.count,
+        b_count: other?.count || 1,
+        min_count: Math.min(channel.count, other?.count || 1),
+      };
+    });
+  const entityScore = sharedEntities.length > 0 ? 0.46 : 0.12;
+  const channelScore = sharedChannels.length > 0 ? 0.34 : 0.08;
+  const sentimentDelta = Math.abs(a.avg_sentiment - b.avg_sentiment);
+  const sentimentScore = Math.max(0, 1 - sentimentDelta / 2);
+  const timeScore = 0.72;
+  const messageScore = sharedChannels.length > 0 ? 0.2 : 0;
+  const similarity = Number(
+    (
+      entityScore * 0.35 +
+      channelScore * 0.18 +
+      timeScore * 0.22 +
+      messageScore * 0.12 +
+      sentimentScore * 0.13
+    ).toFixed(4)
+  );
+  const classification =
+    similarity >= 0.74
+      ? "same_topic"
+      : entityScore >= 0.42 && (channelScore < 0.35 || sentimentDelta >= 0.35)
+        ? "possible_subtopic_split"
+        : similarity >= 0.45
+          ? "related_topics"
+          : "different_topics";
+
+  return {
+    cluster_a_id: a.cluster_id,
+    cluster_b_id: b.cluster_id,
+    algorithm_version: "topic-comparison-v1",
+    similarity_score: similarity,
+    classification,
+    is_same_topic: classification === "same_topic",
+    breakdown: {
+      entities: {
+        score: entityScore,
+        weight: 0.35,
+        contribution: Number((entityScore * 0.35).toFixed(4)),
+        label: "weighted entity overlap",
+      },
+      channels: {
+        score: channelScore,
+        weight: 0.18,
+        contribution: Number((channelScore * 0.18).toFixed(4)),
+        label: "weighted channel overlap",
+      },
+      time: {
+        score: timeScore,
+        weight: 0.22,
+        contribution: Number((timeScore * 0.22).toFixed(4)),
+        label: "time-window overlap and proximity",
+      },
+      messages: {
+        score: messageScore,
+        weight: 0.12,
+        contribution: Number((messageScore * 0.12).toFixed(4)),
+        label: "representative message/fingerprint overlap",
+      },
+      sentiment: {
+        score: sentimentScore,
+        weight: 0.13,
+        contribution: Number((sentimentScore * 0.13).toFixed(4)),
+        label: "signed sentiment similarity",
+      },
+    },
+    evidence: {
+      entities: {
+        score: entityScore,
+        shared: sharedEntities,
+        a_count: a.top_entities.length,
+        b_count: b.top_entities.length,
+      },
+      channels: {
+        score: channelScore,
+        shared: sharedChannels,
+        a_count: a.channels.length,
+        b_count: b.channels.length,
+      },
+      time: {
+        score: timeScore,
+        overlap_coefficient: 0.72,
+        overlap_seconds: 7200,
+        gap_seconds: 0,
+      },
+      messages: {
+        score: messageScore,
+        shared_event_ids: [],
+        shared_fingerprints: sharedChannels.length > 0 ? ["normalized_text_hash:demo-shared"] : [],
+      },
+      sentiment: {
+        score: Number(sentimentScore.toFixed(4)),
+        delta: Number(sentimentDelta.toFixed(4)),
+        a_avg_signed: a.avg_sentiment,
+        b_avg_signed: b.avg_sentiment,
+      },
+      embedding: {
+        score: null,
+        available: false,
+      },
+    },
+    topic_a: {
+      cluster_id: a.cluster_id,
+      label: a.label,
+      message_count: a.message_count,
+      first_seen: a.first_seen,
+      last_seen: a.last_seen,
+      avg_sentiment: a.avg_sentiment,
+      entity_count: a.top_entities.length,
+      channel_count: a.channels.length,
+    },
+    topic_b: {
+      cluster_id: b.cluster_id,
+      label: b.label,
+      message_count: b.message_count,
+      first_seen: b.first_seen,
+      last_seen: b.last_seen,
+      avg_sentiment: b.avg_sentiment,
+      entity_count: b.top_entities.length,
+      channel_count: b.channels.length,
+    },
+    explanation: {
+      summary: `${classification} with similarity ${similarity.toFixed(2)}.`,
+      positive_factors: [
+        sharedEntities.length > 0 ? "The topics share named-entity context." : "The topics are close in time.",
+        sharedChannels.length > 0 ? "At least one channel covered both topics." : "Coverage comes from different channel sets.",
+      ],
+      negative_factors: [
+        "Embedding centroid similarity is unavailable in the analytics storage.",
+        sentimentDelta >= 0.35 ? "Average sentiment differs materially." : "No major sentiment conflict.",
+      ],
+      subtopic_split_signals:
+        classification === "possible_subtopic_split"
+          ? ["Shared context with diverging channel or sentiment profile."]
+          : [],
+    },
+    window: { from, to },
+    cached: false,
   };
 }
 

@@ -73,6 +73,10 @@ class ModelConfig(BaseModel):
     batch_size: int = 32
     normalize_embeddings: bool = True
     version: str = "1.0.0"
+    # ONNX optional backend (set backend="onnx" + onnx_path to activate)
+    backend: str = "torch"
+    onnx_path: Optional[str] = None
+    onnx_provider: str = "CPUExecutionProvider"
 
 
 class ClusteringConfig(BaseModel):

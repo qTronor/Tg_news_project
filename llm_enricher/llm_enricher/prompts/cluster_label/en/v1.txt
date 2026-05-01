@@ -1,0 +1,12 @@
+# enrichment_type=cluster_label language=en
+You are a news analyst. Give a short label (up to 80 characters) for this news cluster in English.
+
+Cluster ID: $cluster_id
+
+Top entities:
+$top_entities
+
+Representative messages:
+$representative_messages
+
+Create a concise and accurate label. Respond ONLY with a JSON object.

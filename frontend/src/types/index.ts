@@ -14,6 +14,7 @@ export interface Message {
   event_id: string;
   channel: string;
   message_id: number;
+  permalink?: string | null;
   text: string;
   date: string;
   views: number;
@@ -81,6 +82,8 @@ export interface FirstSourcePayload {
   propagation_chain: PropagationLink[];
 }
 
+export type ImportanceLevel = "low" | "medium" | "high" | "critical";
+
 export interface Topic {
   cluster_id: ClusterId;
   label: string;
@@ -95,6 +98,9 @@ export interface Topic {
   sparkline: number[];
   channels: ChannelStat[];
   source_status?: SourceStatus;
+  importance_score?: number | null;
+  importance_level?: ImportanceLevel | null;
+  score_calculated_at?: string | null;
 }
 
 export interface ChannelStat {
@@ -144,6 +150,183 @@ export interface TopicDetail extends Topic {
   timeline_annotations?: TopicTimelineAnnotation[];
   graph_analytics?: TopicGraphAnalytics | null;
   source_provenance?: TopicSourceProvenance | null;
+  score_breakdown?: Record<string, unknown> | null;
+}
+
+export interface TopicTimelineApiEvent {
+  event_type: string;
+  event_time: string;
+  bucket_start?: string | null;
+  severity?: number | null;
+  summary: string;
+  details?: Record<string, unknown>;
+  created_at?: string | null;
+}
+
+export interface TopicTimelineApiPoint {
+  bucket_start: string;
+  bucket_end: string;
+  message_count: number;
+  unique_channel_count: number;
+  top_entities: Array<Record<string, unknown>>;
+  sentiment: Record<string, number>;
+  new_channels: string[];
+  event_ids: string[];
+  calculated_at?: string | null;
+}
+
+export interface TopicTimelineApiResponse {
+  cluster_id: ClusterId;
+  bucket_size: string;
+  points: TopicTimelineApiPoint[];
+  events: TopicTimelineApiEvent[];
+  generated_at?: string | null;
+  storage_status?: string;
+}
+
+export interface TopicGraphMetricsApiNode {
+  id: string;
+  label: string;
+  type: string;
+  degree_centrality?: number;
+  betweenness_centrality?: number;
+  pagerank?: number;
+  community_id?: number | null;
+  is_bridge?: boolean;
+  bridge_score?: number;
+  weight?: number;
+}
+
+export interface TopicGraphMetricsApiSummary {
+  node_count: number;
+  edge_count: number;
+  density: number;
+  average_degree?: number;
+  component_count?: number;
+  largest_component_size?: number;
+  community_count?: number;
+  is_small_graph?: boolean;
+}
+
+export interface TopicGraphMetricsApiResponse {
+  cluster_id: ClusterId;
+  window?: { from: string; to: string };
+  algorithm_version?: string;
+  graph?: {
+    nodes?: Array<Record<string, unknown>>;
+    edges?: Array<Record<string, unknown>>;
+  };
+  summary: TopicGraphMetricsApiSummary;
+  top_entities: Entity[];
+  top_channels: Array<ChannelStat & { pagerank?: number }>;
+  bridge_nodes: TopicGraphMetricsApiNode[];
+  communities?: Array<Record<string, unknown>>;
+  nodes?: TopicGraphMetricsApiNode[];
+}
+
+export type TopicComparisonClassification =
+  | "same_topic"
+  | "related_topics"
+  | "different_topics"
+  | "possible_subtopic_split";
+
+export interface TopicComparisonComponent {
+  score: number;
+  weight: number;
+  contribution: number;
+  label: string;
+}
+
+export interface TopicComparisonSharedEntity {
+  id: string;
+  text: string;
+  type?: EntityType | string | null;
+  a_mentions: number;
+  b_mentions: number;
+  min_mentions: number;
+}
+
+export interface TopicComparisonSharedChannel {
+  channel: string;
+  a_count: number;
+  b_count: number;
+  min_count: number;
+}
+
+export interface TopicComparisonResult {
+  cluster_a_id: ClusterId;
+  cluster_b_id: ClusterId;
+  algorithm_version: string;
+  similarity_score: number;
+  classification: TopicComparisonClassification;
+  is_same_topic: boolean;
+  breakdown: Record<string, TopicComparisonComponent>;
+  evidence: {
+    entities: {
+      score: number;
+      shared: TopicComparisonSharedEntity[];
+      a_count: number;
+      b_count: number;
+    };
+    channels: {
+      score: number;
+      shared: TopicComparisonSharedChannel[];
+      a_count: number;
+      b_count: number;
+    };
+    time: {
+      score: number;
+      overlap_coefficient: number;
+      overlap_seconds: number;
+      gap_seconds: number | null;
+    };
+    messages: {
+      score: number;
+      shared_event_ids: string[];
+      shared_fingerprints: string[];
+    };
+    sentiment: {
+      score: number;
+      delta: number;
+      a_avg_signed: number;
+      b_avg_signed: number;
+    };
+    embedding: {
+      score: number | null;
+      available: boolean;
+    };
+  };
+  topic_a: {
+    cluster_id: ClusterId;
+    label: string | null;
+    message_count: number;
+    first_seen: string | null;
+    last_seen: string | null;
+    avg_sentiment: number;
+    entity_count: number;
+    channel_count: number;
+  };
+  topic_b: {
+    cluster_id: ClusterId;
+    label: string | null;
+    message_count: number;
+    first_seen: string | null;
+    last_seen: string | null;
+    avg_sentiment: number;
+    entity_count: number;
+    channel_count: number;
+  };
+  explanation: {
+    summary: string;
+    positive_factors: string[];
+    negative_factors: string[];
+    subtopic_split_signals: string[];
+  };
+  window?: {
+    from: string;
+    to: string;
+  };
+  cached?: boolean;
 }
 
 export interface SentimentPoint {
@@ -171,7 +354,11 @@ export interface GraphNode {
   channel?: string;
   message_id?: number;
   message_date?: string;
+  cluster_id?: ClusterId | null;
+  permalink?: string | null;
   source_status?: SourceStatus;
+  source_event_id?: string | null;
+  source_channel?: string | null;
 }
 
 export interface GraphEdge {
@@ -241,6 +428,37 @@ export interface ChannelVisibility {
   channel_name: string;
   is_visible: boolean;
   updated_at: string | null;
+}
+
+export interface LlmEnrichmentResponse {
+  status: "ok" | "error" | "budget_exhausted" | "pending";
+  result: Record<string, unknown> | null;
+  cached?: boolean;
+  model?: { provider: string; name: string };
+  prompt_version?: string;
+  language?: string;
+  analysis_mode?: string;
+  tokens?: { input: number; output: number };
+  cost_usd?: number;
+  latency_ms?: number;
+  generated_at?: string | null;
+  is_llm_generated: boolean;
+  message?: string | null;
+}
+
+export interface ClusterSummaryResult {
+  summary: string;
+  key_points: string[];
+}
+
+export interface ClusterExplanationResult {
+  why_important: string;
+  drivers: { name: string; weight: number; explanation: string }[];
+}
+
+export interface NoveltyExplanationResult {
+  novelty_verdict: "new" | "ongoing" | "resurgent";
+  rationale: string;
 }
 
 export interface UserTelegramChannel {

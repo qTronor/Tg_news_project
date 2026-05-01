@@ -8,8 +8,18 @@ import { useAuth } from "@/components/auth/auth-provider";
 import { authApi } from "@/lib/auth";
 import { MessageEditModal } from "@/components/admin/message-edit-modal";
 import { SourceStatusBadge } from "@/components/topics/source-status-badge";
+import { useDemoContext } from "@/components/providers";
 import type { Message } from "@/types";
-import { Eye, Forward, Clock, ThumbsUp, ThumbsDown, Pencil } from "lucide-react";
+import {
+  Clock,
+  ExternalLink,
+  Eye,
+  Forward,
+  Network,
+  Pencil,
+  ThumbsDown,
+  ThumbsUp,
+} from "lucide-react";
 import { format, parseISO } from "date-fns";
 import Link from "next/link";
 
@@ -18,10 +28,41 @@ interface Props {
   index: number;
 }
 
+function telegramUrl(message: Message): string | null {
+  if (message.permalink) return message.permalink;
+
+  const channel = message.channel
+    .replace(/^@/, "")
+    .replace(/^https?:\/\/t\.me\//, "")
+    .replace(/^t\.me\//, "")
+    .split("/")[0]
+    ?.trim();
+
+  if (!channel || channel.startsWith("-") || !message.message_id) return null;
+  return `https://t.me/${channel}/${message.message_id}`;
+}
+
+function entityHref(entityId: string): string {
+  return `/entities/${encodeURIComponent(entityId)}`;
+}
+
+function graphHref(message: Message): string | null {
+  if (!message.cluster_id) return null;
+  const params = new URLSearchParams({
+    mode: "propagation",
+    clusterId: message.cluster_id,
+    focus: `msg-${message.event_id}`,
+  });
+  return `/graph?${params.toString()}`;
+}
+
 export function MessageCard({ message, index }: Props) {
   const { user, isAdmin } = useAuth();
+  const { setIsDemo } = useDemoContext();
   const sentColor = sentimentColor(message.sentiment_score || 0);
   const sentLbl = sentimentLabel(message.sentiment_score || 0);
+  const sourceUrl = telegramUrl(message);
+  const graphUrl = graphHref(message);
 
   const [likes, setLikes] = useState(0);
   const [dislikes, setDislikes] = useState(0);
@@ -74,6 +115,29 @@ export function MessageCard({ message, index }: Props) {
             <span className="font-semibold text-foreground">{message.channel}</span>
           </div>
           <div className="flex items-center gap-2">
+            {sourceUrl && (
+              <a
+                href={sourceUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                title="Open in Telegram"
+                aria-label="Open in Telegram"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+            {graphUrl && (
+              <Link
+                href={graphUrl}
+                onClick={() => setIsDemo(false)}
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                title="Show in graph"
+                aria-label="Show in graph"
+              >
+                <Network className="w-3.5 h-3.5" />
+              </Link>
+            )}
             {isAdmin && (
               <button
                 onClick={() => setEditOpen(true)}
@@ -100,7 +164,7 @@ export function MessageCard({ message, index }: Props) {
               </Link>
             )}
             {message.entities?.slice(0, 3).map((e) => (
-              <Link key={e.id} href={`/entities/${e.id}`}>
+              <Link key={e.id} href={entityHref(e.id)}>
                 <Badge variant="entity" color={entityTypeColor(e.type)}>{e.text}</Badge>
               </Link>
             ))}

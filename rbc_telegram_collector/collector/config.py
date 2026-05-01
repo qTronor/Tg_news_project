@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import date
-from typing import List, Optional, Literal
+from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, HttpUrl
 
 
@@ -26,6 +26,24 @@ class LoggingConfig(BaseModel):
 
 class CollectionConfig(BaseModel):
     lookback_days: int = Field(default=3, ge=1)
+
+
+class TelegramProxyConfig(BaseModel):
+    enabled: bool = Field(default_factory=lambda: (os.getenv("TG_PROXY_ENABLED") or "").lower() in {"1", "true", "yes", "on"})
+    scheme: Literal["socks5", "socks4", "http"] = Field(
+        default_factory=lambda: (os.getenv("TG_PROXY_SCHEME") or "socks5").lower()
+    )
+    host: Optional[str] = Field(default_factory=lambda: os.getenv("TG_PROXY_HOST"))
+    port: Optional[int] = Field(
+        default_factory=lambda: int(os.getenv("TG_PROXY_PORT")) if os.getenv("TG_PROXY_PORT") else None
+    )
+    username: Optional[str] = Field(default_factory=lambda: os.getenv("TG_PROXY_USERNAME"))
+    password: Optional[str] = Field(default_factory=lambda: os.getenv("TG_PROXY_PASSWORD"))
+    rdns: bool = Field(default_factory=lambda: (os.getenv("TG_PROXY_RDNS") or "true").lower() not in {"0", "false", "no", "off"})
+
+
+class TelegramConfig(BaseModel):
+    proxy: TelegramProxyConfig = TelegramProxyConfig()
 
 
 class KafkaConfig(BaseModel):
@@ -73,6 +91,7 @@ class BackfillConfig(BaseModel):
 
 class AppConfig(BaseModel):
     channels: List[ChannelConfig]
+    telegram: TelegramConfig = TelegramConfig()
     output: OutputConfig = OutputConfig()
     logging: LoggingConfig = LoggingConfig()
     collection: CollectionConfig = CollectionConfig()

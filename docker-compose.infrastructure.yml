@@ -193,6 +193,8 @@ services:
       ANALYTICS_API__POSTGRES__DATABASE: ${DB_NAME:-telegram_news}
       ANALYTICS_API__POSTGRES__USER: ${DB_USER:-postgres}
       ANALYTICS_API__POSTGRES__PASSWORD: ${DB_PASSWORD:?Database password required}
+      ANALYTICS_API__LLM_ENRICHER__URL: "http://llm-enricher:8000"
+      ANALYTICS_API__LLM_ENRICHER__ENABLED: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -230,6 +232,40 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8030/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+  # =====================================================
+  # LLM Enricher - on-demand LLM explainability layer
+  # =====================================================
+  llm-enricher:
+    build:
+      context: .
+      dockerfile: llm_enricher/Dockerfile
+    container_name: telegram-news-llm-enricher
+    ports:
+      - "8050:8000"
+      - "8051:8001"
+    environment:
+      LLM_ENRICHER__POSTGRES__HOST: postgres
+      LLM_ENRICHER__POSTGRES__PORT: 5432
+      LLM_ENRICHER__POSTGRES__DATABASE: ${DB_NAME:-telegram_news}
+      LLM_ENRICHER__POSTGRES__USER: ${DB_USER:-postgres}
+      LLM_ENRICHER__POSTGRES__PASSWORD: ${DB_PASSWORD:?Database password required}
+      LLM_ENRICHER__LLM__PROVIDER: ${LLM_PROVIDER:-mistral}
+      LLM_ENRICHER__LLM__MODEL_NAME: ${LLM_MODEL:-mistral-large-latest}
+      LLM_ENRICHER__BUDGET__DAILY_USD: ${LLM_DAILY_BUDGET_USD:-5.0}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -382,6 +418,13 @@ services:
       TG_API_ID: ${TG_API_ID:?Telegram API ID required}
       TG_API_HASH: ${TG_API_HASH:?Telegram API hash required}
       TG_STRING_SESSION: ${TG_STRING_SESSION:?Telegram string session required}
+      TG_PROXY_ENABLED: ${TG_PROXY_ENABLED:-false}
+      TG_PROXY_SCHEME: ${TG_PROXY_SCHEME:-socks5}
+      TG_PROXY_HOST: ${TG_PROXY_HOST:-}
+      TG_PROXY_PORT: ${TG_PROXY_PORT:-}
+      TG_PROXY_USERNAME: ${TG_PROXY_USERNAME:-}
+      TG_PROXY_PASSWORD: ${TG_PROXY_PASSWORD:-}
+      TG_PROXY_RDNS: ${TG_PROXY_RDNS:-true}
       COLLECTOR_KAFKA_BOOTSTRAP_SERVERS: kafka:9093
       COLLECTOR_ANALYTICS_DB_HOST: postgres
       COLLECTOR_ANALYTICS_DB_PORT: 5432

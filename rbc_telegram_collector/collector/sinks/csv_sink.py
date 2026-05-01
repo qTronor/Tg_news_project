@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 from typing import Iterable, List
-
-import pandas as pd
 
 from collector.models import CollectedMessage
 from collector.sinks.base import Sink
@@ -19,11 +18,12 @@ class CsvSink(Sink):
             return 0
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        fieldnames = list(rows[0].keys())
+        file_exists = self.path.exists()
 
-        df = pd.DataFrame(rows)
-        if self.path.exists():
-            # append
-            df.to_csv(self.path, mode="a", header=False, index=False, encoding="utf-8")
-        else:
-            df.to_csv(self.path, index=False, encoding="utf-8")
+        with self.path.open("a", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fieldnames)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerows(rows)
         return len(rows)

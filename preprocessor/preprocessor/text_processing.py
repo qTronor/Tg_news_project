@@ -24,11 +24,37 @@ EMOJI_PATTERN = re.compile(
     "\U0001FA70-\U0001FAFF"
     "\U00002702-\U000027B0"
     "\U000024C2-\U0001F251"
+    "\U0001F1E6-\U0001F1FF"
+    "\U00002600-\U000026FF"
+    "\U00002300-\U000023FF"
     "]+",
     flags=re.UNICODE,
 )
+EMOJI_MODIFIER_PATTERN = re.compile(r"[\ufe0e\ufe0f\u200d\U0001F3FB-\U0001F3FF]+")
 PUNCTUATION_PATTERN = re.compile(r"[^\w\s%]", flags=re.UNICODE)
 WHITESPACE_PATTERN = re.compile(r"\s+", flags=re.UNICODE)
+LINE_NOISE_PREFIX_PATTERN = re.compile(
+    r"^\s*(?:[^\w\s]+\s*)?"
+    r"(?:реклама|на правах рекламы|erid\b|ad\b|партнерский материал\b)",
+    re.IGNORECASE,
+)
+PROMO_LINE_PATTERN = re.compile(
+    r"\b("
+    r"подпис(?:аться|ывайтесь|ывайся|ываемся)"
+    r"|подробнее\s+в\s+подписке"
+    r"|читайте\s+нас"
+    r"|наш\s+канал"
+    r"|канал\s+\S+\s+в\s+max"
+    r"|приложени[ея]\s+\S+\s+для\s+(?:ios|android)"
+    r"|прислать\s+новост"
+    r"|присылайте\s+новост"
+    r")\b",
+    re.IGNORECASE,
+)
+TELEGRAM_LINK_PATTERN = re.compile(
+    r"(?:https?://)?(?:t\.me|telegram\.me|telegram\.dog)/\S+",
+    re.IGNORECASE,
+)
 CYRILLIC_PATTERN = re.compile(r"[\u0400-\u04FF]")
 LATIN_PATTERN = re.compile(r"[A-Za-z]")
 LETTER_PATTERN = re.compile(r"[^\W\d_]", flags=re.UNICODE)
@@ -129,6 +155,44 @@ def _clean_entities(items: List[str]) -> List[str]:
         if trimmed:
             cleaned.append(trimmed)
     return cleaned
+
+
+def strip_boilerplate(text: str) -> str:
+    """Remove Telegram promo/footer lines without touching the news body."""
+
+    kept_lines: List[str] = []
+    for line in (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            kept_lines.append("")
+            continue
+
+        compact = WHITESPACE_PATTERN.sub(" ", stripped).strip()
+        compact_without_links = TELEGRAM_LINK_PATTERN.sub(" ", compact)
+        compact_without_links = URL_PATTERN.sub(" ", compact_without_links)
+        compact_without_links = MENTION_PATTERN.sub(" ", compact_without_links)
+        compact_without_links = HASHTAG_PATTERN.sub(" ", compact_without_links)
+        compact_without_links = EMOJI_PATTERN.sub(" ", compact_without_links)
+        compact_without_links = EMOJI_MODIFIER_PATTERN.sub(" ", compact_without_links)
+        compact_without_links = PUNCTUATION_PATTERN.sub(" ", compact_without_links)
+        remaining_words = compact_without_links.split()
+
+        if LINE_NOISE_PREFIX_PATTERN.search(compact):
+            continue
+        if TELEGRAM_LINK_PATTERN.search(compact) and len(remaining_words) <= 3:
+            continue
+        if PROMO_LINE_PATTERN.search(compact):
+            continue
+        if not remaining_words and (
+            URL_PATTERN.search(compact)
+            or MENTION_PATTERN.search(compact)
+            or HASHTAG_PATTERN.search(compact)
+        ):
+            continue
+
+        kept_lines.append(line)
+
+    return "\n".join(kept_lines).strip()
 
 
 def _route_language(
@@ -332,19 +396,22 @@ def preprocess_text(
     full_analysis_languages: Iterable[str] = ("ru", "en"),
 ) -> PreprocessResult:
     raw_text = text or ""
+    content_text = strip_boilerplate(raw_text)
     language = detect_language(
-        raw_text,
+        content_text,
         min_confidence=language_min_confidence,
         full_analysis_languages=full_analysis_languages,
     )
-    urls = _clean_entities(URL_PATTERN.findall(raw_text))
-    mentions = _clean_entities(MENTION_PATTERN.findall(raw_text))
-    hashtags = _clean_entities(HASHTAG_PATTERN.findall(raw_text))
+    entity_text = TELEGRAM_LINK_PATTERN.sub(" ", content_text)
+    urls = _clean_entities(URL_PATTERN.findall(entity_text))
+    mentions = _clean_entities(MENTION_PATTERN.findall(entity_text))
+    hashtags = _clean_entities(HASHTAG_PATTERN.findall(entity_text))
 
-    stripped = URL_PATTERN.sub(" ", raw_text)
+    stripped = URL_PATTERN.sub(" ", entity_text)
     stripped = MENTION_PATTERN.sub(" ", stripped)
     stripped = HASHTAG_PATTERN.sub(" ", stripped)
     stripped = EMOJI_PATTERN.sub(" ", stripped)
+    stripped = EMOJI_MODIFIER_PATTERN.sub(" ", stripped)
     stripped = stripped.lower()
     stripped = PUNCTUATION_PATTERN.sub(" ", stripped)
     stripped = WHITESPACE_PATTERN.sub(" ", stripped).strip()
@@ -357,7 +424,7 @@ def preprocess_text(
         cleaned_text=stripped,
         normalized_text=stripped,
         tokens=tokens,
-        sentences_count=count_sentences(raw_text),
+        sentences_count=count_sentences(content_text),
         word_count=word_count,
         has_urls=bool(urls),
         has_mentions=bool(mentions),

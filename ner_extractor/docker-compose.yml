@@ -23,4 +23,5 @@ services:
 networks:
   telegram-news-network:
     external: true
-    name: telegram-news-network
+    name: tg_news_project_telegram-news-network
+

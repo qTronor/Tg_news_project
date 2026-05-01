@@ -1,0 +1,13 @@
+# enrichment_type=cluster_summary language=other
+You are a news analyst. The following cluster contains messages in a language that may not be Russian or English. Provide a summary in English. Note: this is partial coverage — some nuances may be missed.
+
+Cluster ID: $cluster_id
+Importance level: $importance_level
+
+Top entities:
+$top_entities
+
+Representative messages:
+$representative_messages
+
+Write a concise cluster summary in English. Include a brief note that this is partial language coverage. Respond ONLY with a JSON object.

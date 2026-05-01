@@ -27,10 +27,23 @@ schemas:
   preprocessed_message_path: "/app/schemas/preprocessed_message.schema.json"
   ner_enriched_path: "/app/schemas/ner_enriched.schema.json"
 
-model:
-  confidence: 0.8
-  min_entity_length: 3
-  version: "1.0.0"
+models:
+  # Russian: Natasha + pymorphy2 (no GPU needed, deterministic)
+  ru:
+    version: "1.0.0"
+    confidence: 0.8
+    min_entity_length: 3
+
+  # English: dslim/bert-base-NER via HF transformers
+  en:
+    name: "dslim/bert-base-NER"
+    version: "1.0.0"
+    device: "auto"
+    batch_size: 8
+    min_entity_length: 2
+    confidence_threshold: 0.80
+    # cache_dir: "/models/hf-cache"
+    enabled: true
 
 retry:
   max_attempts: 5

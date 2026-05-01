@@ -176,6 +176,10 @@ class MissingUpstreamError(Exception):
         self.reason = "missing_upstream"
 
 
+def _has_meaningful_text(value: Optional[str]) -> bool:
+    return bool((value or "").strip())
+
+
 @dataclass
 class MessageContext:
     event_id: str
@@ -542,6 +546,10 @@ class PreprocessorService:
                     f"invalid value: {exc}", reason="invalid_payload"
                 ) from exc
             raw_text_value = payload["payload"].get("text")
+            if not _has_meaningful_text(raw_text_value):
+                raise NonRetriableError(
+                    "raw message text is empty", reason="empty_text"
+                )
         else:
             status = payload["payload"].get("status")
             if status == "error":
@@ -617,6 +625,11 @@ class PreprocessorService:
                         self._config.language_detection.full_analysis_languages
                     ),
                 )
+                if result.word_count == 0:
+                    raise NonRetriableError(
+                        "message text is empty after preprocessing",
+                        reason="empty_cleaned_text",
+                    )
                 if not self._config.language_detection.enabled:
                     result.is_supported_for_full_analysis = True
                     result.analysis_mode = "full"

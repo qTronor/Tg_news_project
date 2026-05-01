@@ -11,6 +11,7 @@ import { ChannelBarChart } from "@/components/charts/channel-bar";
 import { useOverview, useTopics, useEntities, useSentiment } from "@/lib/use-data";
 import { formatNumber, entityTypeColor } from "@/lib/utils";
 import { useTranslation } from "@/lib/i18n";
+import { useGlobalTimeRange } from "@/components/providers";
 import { MessageSquare, Layers, Radio, TrendingUp, Loader2 } from "lucide-react";
 import { motion } from "framer-motion";
 import Link from "next/link";
@@ -25,10 +26,12 @@ function LoadingSpinner() {
 
 export default function DashboardPage() {
   const { t } = useTranslation();
+  const { preset, range } = useGlobalTimeRange();
   const { data: overview, isLoading: loadingOverview } = useOverview();
   const { data: topics, isLoading: loadingTopics } = useTopics();
   const { data: entities, isLoading: loadingEntities } = useEntities();
-  const { data: sentiment, isLoading: loadingSentiment } = useSentiment();
+  const sentimentBucket = preset === "7d" || preset === "30d" ? "day" : "hour";
+  const { data: sentiment, isLoading: loadingSentiment } = useSentiment(sentimentBucket);
 
   const topEntities = (entities || []).slice(0, 8);
 
@@ -88,7 +91,11 @@ export default function DashboardPage() {
               <CardHeader>
                 <CardTitle>{t("dash.sentimentDynamics")}</CardTitle>
               </CardHeader>
-              {loadingSentiment || !sentiment ? <LoadingSpinner /> : <SentimentAreaChart data={sentiment} />}
+              {loadingSentiment || !sentiment ? (
+                <LoadingSpinner />
+              ) : (
+                <SentimentAreaChart data={sentiment} preset={preset} from={range.from} to={range.to} />
+              )}
             </Card>
 
             <Card>

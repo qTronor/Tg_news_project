@@ -12,16 +12,33 @@ import { ArrowLeft, Share2, TrendingUp, TrendingDown, Minus, Loader2 } from "luc
 import { motion } from "framer-motion";
 import Link from "next/link";
 
+function entityGraphHref(entityId: string): string {
+  const params = new URLSearchParams({ focus: `ent-${entityId}` });
+  return `/graph?${params.toString()}`;
+}
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export default function EntityDetailPage({ params }: { params: Promise<{ entityId: string }> }) {
   const { t } = useTranslation();
-  const { entityId } = use(params);
+  const { entityId: routeEntityId } = use(params);
+  const entityId = safeDecodeURIComponent(routeEntityId);
   const { data: allEntities, isLoading: loadingEntities } = useEntities();
   const { data: allTopics } = useTopics();
-  const { data: allMessages } = useMessages();
+  const { data: allMessages, isLoading: loadingMessages } = useMessages();
 
-  const entity = (allEntities || []).find(e => e.id === entityId) || (allEntities || [])[0];
+  const messageEntity = (allMessages || [])
+    .flatMap((message) => message.entities || [])
+    .find((candidate) => candidate.id === entityId);
+  const entity = (allEntities || []).find(e => e.id === entityId) || messageEntity;
 
-  if (loadingEntities || !entity) {
+  if (loadingEntities || loadingMessages) {
     return (
       <>
         <Header title={t("entities.title")} />
@@ -32,11 +49,30 @@ export default function EntityDetailPage({ params }: { params: Promise<{ entityI
     );
   }
 
+  if (!entity) {
+    return (
+      <>
+        <Header title={t("entities.title")} />
+        <PageTransition>
+          <div className="p-6 space-y-4">
+            <Link href="/entities" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
+              <ArrowLeft className="w-4 h-4" />
+              {t("entities.backToEntities")}
+            </Link>
+            <div className="bg-card rounded-xl border border-border p-6">
+              <p className="text-sm text-muted-foreground">Entity not found in the selected time range.</p>
+            </div>
+          </div>
+        </PageTransition>
+      </>
+    );
+  }
+
   const relatedTopics = (allTopics || []).filter(t =>
-    t.top_entities.some(e => e.text === entity.text)
+    t.top_entities.some(e => e.id === entity.id || e.text === entity.text)
   );
   const relatedMessages = (allMessages || []).filter(m =>
-    m.entities?.some(e => e.text === entity.text)
+    m.entities?.some(e => e.id === entity.id || e.text === entity.text)
   ).slice(0, 5);
 
   const trendPct = entity.trend_pct || 0;
@@ -53,7 +89,7 @@ export default function EntityDetailPage({ params }: { params: Promise<{ entityI
               <ArrowLeft className="w-4 h-4" />
               {t("entities.backToEntities")}
             </Link>
-            <Link href={`/graph?focus=ent-${entityId}`}>
+            <Link href={entityGraphHref(entityId)}>
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}

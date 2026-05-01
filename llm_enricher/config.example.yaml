@@ -1,0 +1,45 @@
+service_name: llm-enricher
+
+postgres:
+  host: localhost
+  port: 5432
+  database: telegram_news
+  user: postgres
+  password: postgres
+  min_size: 1
+  max_size: 5
+  command_timeout: 30
+
+health:
+  host: "0.0.0.0"
+  port: 8000
+
+metrics:
+  host: "0.0.0.0"
+  port: 8001
+
+logging:
+  level: INFO
+
+cache:
+  ttl_seconds: 604800      # 7 days
+  error_ttl_seconds: 300   # 5 minutes
+
+budget:
+  daily_usd: 5.0
+  pricing_input_per_mtok: 2.0
+  pricing_output_per_mtok: 6.0
+
+llm:
+  provider: mock            # mock | mistral  (set via LLM_ENRICHER__LLM__PROVIDER env)
+  model_name: mistral-large-latest
+  temperature: 0.2
+  timeout_seconds: 30.0
+  retry_attempts: 3
+  max_tokens_summary: 500
+  max_tokens_explanation: 600
+  max_tokens_novelty: 300
+  max_tokens_label: 100
+  circuit_breaker:
+    fail_max: 5
+    reset_timeout_seconds: 30

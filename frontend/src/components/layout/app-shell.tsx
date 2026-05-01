@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, createContext, useContext, useEffect } from "react";
+import { useState, createContext, useContext } from "react";
 import { usePathname } from "next/navigation";
 import { Sidebar } from "./sidebar";
 import { cn } from "@/lib/utils";
@@ -23,17 +23,18 @@ export function useSidebar() { return useContext(SidebarContext); }
 const NO_SHELL_PATHS = ["/login", "/forgot-password", "/reset-password"];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
-
-  useEffect(() => {
-    setMobileOpen(false);
-  }, [pathname]);
 
   if (NO_SHELL_PATHS.includes(pathname)) {
     return <>{children}</>;
   }
+
+  return <ShellLayout key={pathname}>{children}</ShellLayout>;
+}
+
+function ShellLayout({ children }: { children: React.ReactNode }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
     <SidebarContext.Provider value={{ collapsed, setCollapsed, mobileOpen, setMobileOpen }}>

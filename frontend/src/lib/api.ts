@@ -4,15 +4,20 @@ import type {
   Entity,
   FirstSourcePayload,
   GraphData,
+  LlmEnrichmentResponse,
   Message,
   OverviewStats,
   SentimentPoint,
   Topic,
+  TopicComparisonResult,
   TopicDetail,
+  TopicGraphMetricsApiResponse,
+  TopicTimelineApiResponse,
 } from "@/types";
 
 const BASE = config.apiBaseUrl;
 const TIMEOUT_MS = 5_000;
+const LLM_REFRESH_TIMEOUT_MS = 35_000;
 
 async function fetchJson<T>(path: string, params?: Record<string, string>): Promise<T> {
   const url = new URL(path, BASE);
@@ -45,6 +50,29 @@ async function fetchJson<T>(path: string, params?: Record<string, string>): Prom
   }
 }
 
+async function postJson<T>(path: string, body?: unknown, timeoutMs = TIMEOUT_MS): Promise<T> {
+  const url = new URL(path, BASE);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+    return await res.json();
+  } catch (err: unknown) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error(`API timeout: ${url.pathname}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export const api = {
   getOverview(from: string, to: string): Promise<OverviewStats> {
     return fetchJson("/analytics/overview", { from, to });
@@ -60,6 +88,30 @@ export const api = {
 
   getClusterDetail(clusterId: ClusterId, from: string, to: string): Promise<TopicDetail> {
     return fetchJson(`/analytics/clusters/${encodeURIComponent(clusterId)}`, { from, to });
+  },
+
+  getClusterTimeline(
+    clusterId: ClusterId,
+    from: string,
+    to: string,
+    bucket = "hour"
+  ): Promise<TopicTimelineApiResponse> {
+    return fetchJson(`/analytics/clusters/${encodeURIComponent(clusterId)}/timeline`, {
+      from,
+      to,
+      bucket,
+    });
+  },
+
+  getClusterGraphMetrics(
+    clusterId: ClusterId,
+    from: string,
+    to: string
+  ): Promise<TopicGraphMetricsApiResponse> {
+    return fetchJson(`/analytics/clusters/${encodeURIComponent(clusterId)}/graph-metrics`, {
+      from,
+      to,
+    });
   },
 
   getClusterDocuments(
@@ -90,6 +142,18 @@ export const api = {
       from,
       to,
     });
+  },
+
+  getTopicComparison(
+    clusterId: ClusterId,
+    otherClusterId: ClusterId,
+    from: string,
+    to: string
+  ): Promise<TopicComparisonResult> {
+    return fetchJson(
+      `/analytics/clusters/${encodeURIComponent(clusterId)}/compare/${encodeURIComponent(otherClusterId)}`,
+      { from, to }
+    );
   },
 
   getTopEntities(
@@ -138,6 +202,18 @@ export const api = {
       ...(focusId ? { focus: focusId } : {}),
       ...(clusterId ? { cluster_id: clusterId } : {}),
     });
+  },
+
+  getLlmEnrichment(clusterId: ClusterId, enrichmentType: string): Promise<LlmEnrichmentResponse> {
+    return fetchJson(`/analytics/clusters/${encodeURIComponent(clusterId)}/llm/${enrichmentType}`);
+  },
+
+  refreshLlmEnrichment(clusterId: ClusterId, enrichmentType: string): Promise<LlmEnrichmentResponse> {
+    return postJson(
+      `/analytics/clusters/${encodeURIComponent(clusterId)}/llm/${enrichmentType}/refresh`,
+      {},
+      LLM_REFRESH_TIMEOUT_MS,
+    );
   },
 
   getMessages(

@@ -25,6 +25,17 @@ from collector.sources.base import Source
 
 
 @dataclass(frozen=True)
+class TelegramProxySettings:
+    enabled: bool = False
+    scheme: str = "socks5"
+    host: Optional[str] = None
+    port: Optional[int] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    rdns: bool = True
+
+
+@dataclass(frozen=True)
 class ValidatedTelegramChannel:
     name: str
     url: str
@@ -47,6 +58,74 @@ def _env_required(name: str) -> str:
     if not val:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return val
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _load_proxy_settings(proxy: Optional[TelegramProxySettings]) -> TelegramProxySettings:
+    base = proxy or TelegramProxySettings()
+
+    enabled = base.enabled
+    if os.getenv("TG_PROXY_ENABLED") is not None:
+        enabled = _env_flag("TG_PROXY_ENABLED", default=base.enabled)
+
+    scheme = (os.getenv("TG_PROXY_SCHEME") or base.scheme or "socks5").strip().lower()
+    host = os.getenv("TG_PROXY_HOST")
+    if host is None:
+        host = base.host
+
+    port_env = os.getenv("TG_PROXY_PORT")
+    port = int(port_env) if port_env else base.port
+
+    username = os.getenv("TG_PROXY_USERNAME")
+    if username is None:
+        username = base.username
+    username = username or None
+
+    password = os.getenv("TG_PROXY_PASSWORD")
+    if password is None:
+        password = base.password
+    password = password or None
+
+    rdns = base.rdns
+    if os.getenv("TG_PROXY_RDNS") is not None:
+        rdns = _env_flag("TG_PROXY_RDNS", default=base.rdns)
+
+    return TelegramProxySettings(
+        enabled=enabled,
+        scheme=scheme,
+        host=host,
+        port=port,
+        username=username,
+        password=password,
+        rdns=rdns,
+    )
+
+
+def _build_telethon_proxy(proxy: TelegramProxySettings) -> Any:
+    if not proxy.enabled:
+        return None
+    if not proxy.host or not proxy.port:
+        raise RuntimeError("Telegram proxy is enabled, but TG_PROXY_HOST or TG_PROXY_PORT is missing.")
+    proxy_type = proxy.scheme.lower()
+    if proxy_type not in {"socks5", "socks4", "http"}:
+        raise RuntimeError(
+            f"Unsupported Telegram proxy scheme: {proxy.scheme}. Expected one of: socks5, socks4, http."
+        )
+
+    return (
+        proxy_type,
+        proxy.host,
+        proxy.port,
+        proxy.rdns,
+        proxy.username,
+        proxy.password,
+    )
 
 
 def _coerce_utc(dt: Optional[datetime]) -> Optional[datetime]:
@@ -159,7 +238,13 @@ def classify_telegram_exception(exc: Exception) -> TelegramChannelError:
 
 
 class TelegramChannelSource(Source):
-    def __init__(self, *, session_name: str = "telegram", workdir: str = "."):
+    def __init__(
+        self,
+        *,
+        session_name: str = "telegram",
+        workdir: str = ".",
+        proxy: Optional[TelegramProxySettings] = None,
+    ):
         api_id = int(_env_required("TG_API_ID"))
         api_hash = _env_required("TG_API_HASH")
 
@@ -168,6 +253,7 @@ class TelegramChannelSource(Source):
             session = StringSession(string_session)
         else:
             session = session_name
+        proxy_settings = _load_proxy_settings(proxy)
 
         self.client = TelegramClient(
             session,
@@ -175,6 +261,7 @@ class TelegramChannelSource(Source):
             api_hash,
             device_model="collector",
             system_version="1.0",
+            proxy=_build_telethon_proxy(proxy_settings),
         )
         self.workdir = workdir
 
@@ -314,7 +401,9 @@ class TelegramChannelSource(Source):
         if msg_dt is None:
             return None
 
-        text = msg.message or ""
+        text = (msg.message or "").strip()
+        if not text:
+            return None
         channel_id = _peer_id(getattr(msg, "peer_id", None))
         views = getattr(msg, "views", None)
         forwards = getattr(msg, "forwards", None)

@@ -10,6 +10,7 @@ import {
   mockMessages,
   mockOverview,
   mockSentiment,
+  mockTopicComparison,
   mockTopicDetail,
   mockTopics,
 } from "./mock-data";
@@ -19,11 +20,15 @@ import type {
   Entity,
   FirstSourcePayload,
   GraphData,
+  LlmEnrichmentResponse,
   Message,
   OverviewStats,
   SentimentPoint,
   Topic,
+  TopicComparisonResult,
   TopicDetail,
+  TopicGraphMetricsApiResponse,
+  TopicTimelineApiResponse,
 } from "@/types";
 
 export type GraphMode = "overview" | "propagation";
@@ -87,6 +92,24 @@ export function useTopicDetail(clusterId: ClusterId) {
         isDemo
           ? Promise.resolve(mockTopicDetail(clusterId))
           : api.getClusterDetail(clusterId, from, to),
+    })
+  );
+}
+
+export function useTopicComparison(clusterId: ClusterId, otherClusterId?: ClusterId | null) {
+  const { isDemo } = useDemoContext();
+  const { from, to } = useTimeParams();
+
+  return useErrorReporter(
+    useQuery<TopicComparisonResult | null>({
+      queryKey: ["topicComparison", clusterId, otherClusterId, from, to, isDemo],
+      enabled: Boolean(otherClusterId),
+      queryFn: () => {
+        if (!otherClusterId) return Promise.resolve(null);
+        return isDemo
+          ? Promise.resolve(mockTopicComparison(clusterId, otherClusterId, from, to))
+          : api.getTopicComparison(clusterId, otherClusterId, from, to);
+      },
     })
   );
 }
@@ -181,6 +204,46 @@ export function useMessages(filters?: {
         return api.getMessages(from, to, filters);
       },
       refetchInterval: isDemo ? false : config.pollingIntervalMs,
+    })
+  );
+}
+
+export function useLlmEnrichment(clusterId: ClusterId, enrichmentType: string) {
+  const { isDemo } = useDemoContext();
+  return useQuery<LlmEnrichmentResponse>({
+    queryKey: ["llmEnrichment", clusterId, enrichmentType],
+    queryFn: () =>
+      isDemo
+        ? Promise.resolve<LlmEnrichmentResponse>({ status: "pending", result: null, is_llm_generated: true })
+        : api.getLlmEnrichment(clusterId, enrichmentType),
+    retry: false,
+    staleTime: 60_000,
+    refetchInterval: (query) => (query.state.data?.status === "pending" ? 5_000 : false),
+  });
+}
+
+export function useTopicTimeline(clusterId: ClusterId, bucket = "hour") {
+  const { isDemo } = useDemoContext();
+  const { from, to } = useTimeParams();
+
+  return useErrorReporter(
+    useQuery<TopicTimelineApiResponse | null>({
+      queryKey: ["topicTimeline", clusterId, bucket, from, to, isDemo],
+      queryFn: () =>
+        isDemo ? Promise.resolve(null) : api.getClusterTimeline(clusterId, from, to, bucket),
+    })
+  );
+}
+
+export function useTopicGraphMetrics(clusterId: ClusterId) {
+  const { isDemo } = useDemoContext();
+  const { from, to } = useTimeParams();
+
+  return useErrorReporter(
+    useQuery<TopicGraphMetricsApiResponse | null>({
+      queryKey: ["topicGraphMetrics", clusterId, from, to, isDemo],
+      queryFn: () =>
+        isDemo ? Promise.resolve(null) : api.getClusterGraphMetrics(clusterId, from, to),
     })
   );
 }

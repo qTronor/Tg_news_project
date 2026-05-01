@@ -2,17 +2,84 @@
 
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import type { SentimentPoint } from "@/types";
-import { format, parseISO } from "date-fns";
+import { format, isSameDay, parseISO } from "date-fns";
+import type { RangePreset } from "@/lib/hooks";
 
 interface Props {
   data: SentimentPoint[];
+  preset?: RangePreset;
+  from?: string;
+  to?: string;
 }
 
-export function SentimentAreaChart({ data }: Props) {
-  const formatted = data.map(d => ({
+function resolveTicks(preset: RangePreset, fromDate: Date, toDate: Date) {
+  const start = fromDate.getTime();
+  const end = toDate.getTime();
+  if (end <= start) return [start, end];
+
+  const stepMs = (() => {
+    switch (preset) {
+      case "1h":
+        return 15 * 60_000;
+      case "6h":
+        return 30 * 60_000;
+      case "24h":
+        return 60 * 60_000;
+      case "7d":
+      case "30d":
+        return 24 * 60 * 60_000;
+      default: {
+        const duration = end - start;
+        if (duration <= 6 * 60 * 60_000) return 30 * 60_000;
+        if (duration <= 24 * 60 * 60_000) return 60 * 60_000;
+        return 24 * 60 * 60_000;
+      }
+    }
+  })();
+
+  const ticks: number[] = [];
+  for (let value = start; value < end; value += stepMs) {
+    ticks.push(value);
+  }
+  if (ticks.length === 0 || ticks[ticks.length - 1] !== end) {
+    ticks.push(end);
+  }
+  return ticks;
+}
+
+function formatTick(ts: number, preset: RangePreset, toDate: Date) {
+  const value = new Date(ts);
+  switch (preset) {
+    case "1h":
+    case "6h":
+    case "24h":
+      return format(value, "HH:mm");
+    case "7d":
+      return format(value, "EEE dd");
+    case "30d":
+      return isSameDay(value, toDate) ? `Today ${format(value, "dd")}` : format(value, "dd MMM");
+    default:
+      return format(value, "dd MMM HH:mm");
+  }
+}
+
+function formatTooltipLabel(ts: number, preset: RangePreset) {
+  const value = new Date(ts);
+  if (preset === "7d" || preset === "30d") {
+    return format(value, "dd MMM yyyy");
+  }
+  return format(value, "dd MMM yyyy HH:mm");
+}
+
+export function SentimentAreaChart({ data, preset = "24h", from, to }: Props) {
+  const safeFrom = from ? parseISO(from) : data[0] ? parseISO(data[0].time) : new Date();
+  const safeTo = to ? parseISO(to) : data[data.length - 1] ? parseISO(data[data.length - 1].time) : new Date();
+
+  const formatted = data.map((d) => ({
     ...d,
-    label: format(parseISO(d.time), "HH:mm"),
+    ts: parseISO(d.time).getTime(),
   }));
+  const ticks = resolveTicks(preset, safeFrom, safeTo);
 
   return (
     <ResponsiveContainer width="100%" height={260}>
@@ -32,9 +99,20 @@ export function SentimentAreaChart({ data }: Props) {
           </linearGradient>
         </defs>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-        <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} tickLine={false} axisLine={false} />
+        <XAxis
+          type="number"
+          dataKey="ts"
+          domain={[safeFrom.getTime(), safeTo.getTime()]}
+          ticks={ticks}
+          tickFormatter={(value) => formatTick(value, preset, safeTo)}
+          tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+          minTickGap={16}
+          tickLine={false}
+          axisLine={false}
+        />
         <YAxis tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} tickLine={false} axisLine={false} />
         <Tooltip
+          labelFormatter={(value) => formatTooltipLabel(Number(value), preset)}
           contentStyle={{
             background: "var(--card)",
             border: "1px solid var(--border)",

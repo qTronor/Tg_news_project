@@ -4,22 +4,20 @@ import asyncio
 import itertools
 import json
 import logging
-import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import List, Optional, Tuple
 from uuid import UUID
 
 import asyncpg
-import pymorphy2
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.structs import OffsetAndMetadata, TopicPartition
 from aiohttp import web
-from natasha import Doc, NewsEmbedding, NewsNERTagger, Segmenter
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
+from ner_extractor.backends import Entity, NatashaRuBackend, TransformersEnBackend
 from ner_extractor.config import AppConfig
 from ner_extractor.metrics import (
     ENTITIES_EXTRACTED,
@@ -33,8 +31,6 @@ from ner_extractor.utils import decode_kafka_key, parse_iso_datetime, utc_now_is
 
 
 logger = logging.getLogger("ner_extractor")
-
-NATASHA_TYPE_MAP = {"PER": "PERSON", "ORG": "ORG", "LOC": "LOC"}
 
 INSERT_PROCESSED_EVENT_SQL = """
 INSERT INTO processed_events (event_id, event_type, event_timestamp, consumer_id, status)
@@ -91,11 +87,13 @@ INSERT INTO ner_results (
     model_version,
     event_timestamp,
     trace_id,
-    extracted_at
+    extracted_at,
+    model_backend,
+    model_language
 )
 VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9,
-    $10, $11, $12, $13, $14, $15, $16, $17, $18
+    $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
 )
 RETURNING id;
 """
@@ -140,15 +138,6 @@ class NonRetriableError(Exception):
     def __init__(self, message: str, reason: str = "invalid_payload") -> None:
         super().__init__(message)
         self.reason = reason
-
-
-@dataclass
-class EntitySpan:
-    text: str
-    entity_type: str
-    start: int
-    end: int
-    normalized: Optional[str]
 
 
 @dataclass
@@ -198,12 +187,27 @@ class NerExtractorService:
         self._health_site: Optional[web.TCPSite] = None
         self._metrics_site: Optional[web.TCPSite] = None
 
+        ru_cfg = config.models.ru
         logger.info("loading natasha NER models")
-        self._segmenter = Segmenter()
-        emb = NewsEmbedding()
-        self._ner_tagger = NewsNERTagger(emb)
-        self._morph = pymorphy2.MorphAnalyzer()
+        self._ru_backend = NatashaRuBackend(
+            version=ru_cfg.version,
+            min_entity_length=ru_cfg.min_entity_length,
+        )
         logger.info("natasha NER models loaded")
+
+        en_cfg = config.models.en
+        self._en_backend: Optional[TransformersEnBackend] = None
+        if en_cfg.enabled:
+            self._en_backend = TransformersEnBackend(
+                name=en_cfg.name,
+                version=en_cfg.version,
+                device=en_cfg.device,
+                batch_size=en_cfg.batch_size,
+                min_entity_length=en_cfg.min_entity_length,
+                confidence_threshold=en_cfg.confidence_threshold,
+                cache_dir=en_cfg.cache_dir,
+            )
+            logger.info("EN NER backend configured model=%s (lazy load)", en_cfg.name)
 
     async def start(self) -> None:
         await self._start_db()
@@ -538,7 +542,12 @@ class NerExtractorService:
                     MESSAGES_PROCESSED.labels(status="skipped_unsupported").inc()
                     return ProcessingOutcome.SUCCESS
 
-                entities = self._extract_entities(context.original_text)
+                loop = asyncio.get_event_loop()
+                backend = self._pick_backend(context.original_language)
+                entities = await loop.run_in_executor(
+                    None, backend.extract, context.original_text
+                )
+
                 await conn.execute(DELETE_ENTITY_RELATIONS_SQL, preprocessed_id)
                 await conn.execute(DELETE_NER_RESULTS_SQL, preprocessed_id)
                 processing_time_ms = (
@@ -548,24 +557,26 @@ class NerExtractorService:
                 for ent in entities:
                     await conn.fetchval(
                         INSERT_NER_RESULT_SQL,
-                        preprocessed_id,
-                        context.message_id,
-                        context.channel,
-                        context.event_id,
-                        ent.text,
-                        ent.entity_type,
-                        ent.start,
-                        ent.end,
-                        self._config.model.confidence,
-                        ent.normalized,
-                        None,
-                        [],
-                        json.dumps({"source": "natasha"}),
-                        "natasha",
-                        self._config.model.version,
-                        now_dt,
-                        context.trace_id_uuid,
-                        now_dt,
+                        preprocessed_id,           # $1
+                        context.message_id,        # $2
+                        context.channel,           # $3
+                        context.event_id,          # $4
+                        ent.text,                  # $5
+                        ent.entity_type,           # $6
+                        ent.start,                 # $7
+                        ent.end,                   # $8
+                        ent.confidence,            # $9
+                        ent.normalized,            # $10
+                        None,                      # $11 wikidata_id
+                        [],                        # $12 aliases
+                        json.dumps({"source": backend.name}),  # $13
+                        backend.name,              # $14
+                        backend.version,           # $15
+                        now_dt,                    # $16
+                        context.trace_id_uuid,     # $17
+                        now_dt,                    # $18
+                        backend.name,              # $19 model_backend
+                        context.original_language, # $20 model_language
                     )
                     ENTITIES_EXTRACTED.labels(entity_type=ent.entity_type).inc()
 
@@ -587,7 +598,7 @@ class NerExtractorService:
                     )
 
         enriched_event = self._build_enriched_event(
-            context, entities, relations, now_iso, processing_time_ms
+            context, entities, relations, backend, now_iso, processing_time_ms
         )
         try:
             self._output_validator.validate(enriched_event)
@@ -623,117 +634,30 @@ class NerExtractorService:
         )
         return row is not None
 
-    # ── NER inference ───────────────────────────────────────────────
+    # ── NER routing ─────────────────────────────────────────────────
 
-    def _extract_entities(self, text: str) -> list[EntitySpan]:
-        if not text or not text.strip():
-            return []
+    def _pick_backend(self, language: str):
+        """Return the NER backend for ``language``.
 
-        doc = Doc(text)
-        doc.segment(self._segmenter)
-        doc.tag_ner(self._ner_tagger)
+        RU → Natasha. EN → transformers (dslim). Any other language: fall back
+        to Natasha (will produce few/no entities for non-Cyrillic text, which
+        is acceptable since the skip-logic above already routes truly
+        unsupported languages out before reaching this point).
+        """
+        if language == "en" and self._en_backend is not None:
+            return self._en_backend
+        return self._ru_backend
 
-        entities: list[EntitySpan] = []
-        seen: set[tuple[str, int, int]] = set()
-        for span in doc.spans:
-            if span.type not in NATASHA_TYPE_MAP:
-                continue
-            normalized = self._normalize_entity(span.text)
-            if len(normalized) < self._config.model.min_entity_length:
-                continue
-            if normalized.isnumeric():
-                continue
-            dedup_key = (normalized.lower(), span.start, span.stop)
-            if dedup_key in seen:
-                continue
-            seen.add(dedup_key)
-
-            mapped_type = NATASHA_TYPE_MAP[span.type]
-            canonical = self._canonicalize(normalized, span.type)
-
-            entities.append(
-                EntitySpan(
-                    text=span.text,
-                    entity_type=mapped_type,
-                    start=span.start,
-                    end=span.stop,
-                    normalized=canonical,
-                )
-            )
-        return entities
-
-    def _normalize_entity(self, text: str) -> str:
-        text = re.sub(r"\s+", " ", text).strip()
-        text = re.sub(r"[\"'«»]", "", text)
-        text = re.sub(r"[\(\)\[\]{}]", "", text)
-        text = re.sub(r"[‐‑‒–—−]", "-", text)
-        text = re.sub(r"\s*-\s*", "-", text)
-        if text.isupper():
-            text = text.title()
-        return text.strip()
-
-    def _canonicalize(self, text: str, natasha_type: str) -> str:
-        if natasha_type == "PER":
-            return self._canonicalize_person(text)
-        tokens = text.split()
-        lemmas = []
-        for tok in tokens:
-            if not re.search(r"[A-Za-zА-Яа-яЁё]", tok):
-                continue
-            if tok.isupper() and len(tok) <= 5:
-                lemmas.append(tok)
-            else:
-                parsed = self._morph.parse(tok)
-                lemmas.append(parsed[0].normal_form)
-        if not lemmas:
-            return text
-        return " ".join(w if w.isupper() else w.title() for w in lemmas)
-
-    def _canonicalize_person(self, text: str) -> str:
-        tokens = text.split()
-        tokens = [t for t in tokens if re.search(r"[A-Za-zА-Яа-яЁё]", t)]
-        if not tokens:
-            return text
-        parsed_tokens = []
-        for tok in tokens:
-            parses = self._morph.parse(tok)
-            best = parses[0]
-            role = None
-            lemma = best.normal_form
-            for p in parses:
-                if "Surn" in p.tag:
-                    role = "Surn"
-                    lemma = p.normal_form
-                    break
-                if "Name" in p.tag and role is None:
-                    role = "Name"
-                    lemma = p.normal_form
-                if "Patr" in p.tag and role is None:
-                    role = "Patr"
-                    lemma = p.normal_form
-            parsed_tokens.append({"lemma": lemma, "role": role})
-        surname = next(
-            (p["lemma"] for p in parsed_tokens if p["role"] == "Surn"), None
-        )
-        name = next(
-            (p["lemma"] for p in parsed_tokens if p["role"] == "Name"), None
-        )
-        patronymic = next(
-            (p["lemma"] for p in parsed_tokens if p["role"] == "Patr"), None
-        )
-        if surname or name:
-            ordered = [w for w in [surname, name, patronymic] if w]
-            return " ".join(w.title() for w in ordered)
-        return " ".join(p["lemma"].title() for p in parsed_tokens)
+    # ── co-occurrence relations ─────────────────────────────────────
 
     @staticmethod
     def _build_co_occurrence_relations(
-        entities: list[EntitySpan],
-    ) -> list[tuple[str, str, str, str]]:
+        entities: List[Entity],
+    ) -> List[Tuple[str, str, str, str]]:
         if len(entities) < 2:
             return []
-        relations: list[tuple[str, str, str, str]] = []
-        seen: set[tuple[str, str]] = set()
+        relations: List[Tuple[str, str, str, str]] = []
+        seen = set()
         for a, b in itertools.combinations(entities, 2):
             norm_a = (a.normalized or a.text).lower()
             norm_b = (b.normalized or b.text).lower()
@@ -756,8 +680,9 @@ class NerExtractorService:
     def _build_enriched_event(
         self,
         context: MessageContext,
-        entities: list[EntitySpan],
-        relations: list[tuple[str, str, str, str]],
+        entities: List[Entity],
+        relations: List[Tuple[str, str, str, str]],
+        backend,
         now_iso: str,
         processing_time_ms: float,
     ) -> dict:
@@ -767,7 +692,7 @@ class NerExtractorService:
                 "type": ent.entity_type,
                 "start": ent.start,
                 "end": ent.end,
-                "confidence": self._config.model.confidence,
+                "confidence": ent.confidence,
                 "normalized": ent.normalized,
                 "wikidata_id": None,
             }
@@ -797,9 +722,11 @@ class NerExtractorService:
                 "entities": entities_payload,
                 "relations": relations_payload,
                 "model": {
-                    "name": "natasha",
-                    "version": self._config.model.version,
-                    "framework": "natasha",
+                    "name": backend.name,
+                    "version": backend.version,
+                    "framework": "natasha" if backend.language == "ru" else "transformers",
+                    "backend": backend.name,
+                    "language": backend.language,
                 },
                 "extracted_at": now_iso,
                 "processing_time_ms": round(processing_time_ms, 3),

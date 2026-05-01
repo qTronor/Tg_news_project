@@ -34,6 +34,7 @@ class ApiConfig(BaseModel):
     default_graph_nodes: int = 30
     max_graph_nodes: int = 120
     graph_metrics_cache_ttl_seconds: int = 900
+    topic_comparison_cache_ttl_seconds: int = 900
 
 
 class MetricsConfig(BaseModel):
@@ -50,6 +51,13 @@ class LoggingConfig(BaseModel):
     level: str = "INFO"
 
 
+class LLMEnricherClientConfig(BaseModel):
+    url: str = "http://localhost:8030"
+    timeout_seconds: float = 2.0
+    refresh_timeout_seconds: float = 30.0
+    enabled: bool = True
+
+
 class AppConfig(BaseModel):
     service_name: str = "analytics-api"
     postgres: PostgresConfig = PostgresConfig()
@@ -57,6 +65,7 @@ class AppConfig(BaseModel):
     metrics: MetricsConfig = MetricsConfig()
     health: HealthConfig = HealthConfig()
     logging: LoggingConfig = LoggingConfig()
+    llm_enricher: LLMEnricherClientConfig = LLMEnricherClientConfig()
 
 
 class EnvConfig(BaseSettings):
@@ -72,6 +81,7 @@ class EnvConfig(BaseSettings):
     metrics: Optional[MetricsConfig] = None
     health: Optional[HealthConfig] = None
     logging: Optional[LoggingConfig] = None
+    llm_enricher: Optional[LLMEnricherClientConfig] = None
 
 
 def _deep_update(base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:

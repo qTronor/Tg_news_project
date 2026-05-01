@@ -16,15 +16,13 @@ import sqlite3
 import asyncpg
 import hdbscan
 import numpy as np
-import torch
 import umap
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.structs import OffsetAndMetadata, TopicPartition
 from aiohttp import web
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from sentence_transformers import SentenceTransformer
-
 from topic_clusterer.config import AppConfig
+from topic_clusterer.embeddings_backend import build_embeddings_backend
 from topic_clusterer.metrics import (
     BUFFER_SIZE,
     CLUSTERING_DURATION,
@@ -279,50 +277,16 @@ class TopicClustererService:
         self._metrics_site: Optional[web.TCPSite] = None
         self._clustering_task: Optional[asyncio.Task] = None
         self._clustering_lock = asyncio.Lock()
-        self._model_lock = asyncio.Lock()
-        self._sbert = None
-        self._device = self._resolve_device(config.model.device)
+        self._embeddings_backend = build_embeddings_backend(config)
         logger.info(
-            "topic model configured name=%s device=%s",
+            "topic model configured name=%s backend=%s",
             config.model.sbert_model,
-            self._device,
+            config.model.backend,
         )
 
-    @staticmethod
-    def _resolve_device(requested_device: str) -> str:
-        normalized = (requested_device or "auto").strip().lower()
-        if normalized == "auto":
-            return "cuda" if torch.cuda.is_available() else "cpu"
-        if normalized.startswith("cuda") and not torch.cuda.is_available():
-            logger.warning(
-                "cuda requested for topic model but unavailable, falling back to cpu"
-            )
-            return "cpu"
-        return normalized
-
     async def _ensure_model_loaded(self) -> None:
-        if self._sbert is not None:
-            return
-        async with self._model_lock:
-            if self._sbert is not None:
-                return
-            model_kwargs: dict[str, Any] = {
-                "device": self._device,
-            }
-            if self._config.model.cache_dir:
-                model_kwargs["cache_folder"] = self._config.model.cache_dir
-            logger.info(
-                "loading sbert model name=%s device=%s",
-                self._config.model.sbert_model,
-                self._device,
-            )
-            self._sbert = SentenceTransformer(
-                self._config.model.sbert_model,
-                **model_kwargs,
-            )
-            if self._device == "cuda" and self._config.model.use_float16:
-                self._sbert.half()
-            logger.info("sbert model loaded")
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._embeddings_backend.ensure_loaded)
 
     async def start(self) -> None:
         await self._start_db()
@@ -732,11 +696,14 @@ class TopicClustererService:
 
     async def _compute_embedding(self, text: str) -> np.ndarray:
         await self._ensure_model_loaded()
-        return self._sbert.encode(
-            text,
-            normalize_embeddings=self._config.model.normalize_embeddings,
-            batch_size=self._config.model.batch_size,
-            show_progress_bar=False,
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: self._embeddings_backend.compute(
+                text,
+                normalize=self._config.model.normalize_embeddings,
+                batch_size=self._config.model.batch_size,
+            ),
         )
 
     # ── clustering scheduler ────────────────────────────────────────

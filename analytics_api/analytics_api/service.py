@@ -11,6 +11,7 @@ from typing import Any, Optional
 from urllib.parse import unquote
 
 import asyncpg
+import httpx
 from aiohttp import web
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
@@ -22,6 +23,26 @@ from analytics_api.metrics import (
     GRAPH_ANALYTICS_CACHE_TOTAL,
     GRAPH_ANALYTICS_DURATION,
     GRAPH_ANALYTICS_RUNS_TOTAL,
+    TOPIC_COMPARISON_CACHE_TOTAL,
+    TOPIC_COMPARISON_DURATION,
+    TOPIC_COMPARISON_RUNS_TOTAL,
+    TOPIC_TIMELINE_REBUILD_DURATION,
+    TOPIC_TIMELINE_REBUILDS_TOTAL,
+)
+from analytics_api.topic_comparison import (
+    ALGO_VERSION as TOPIC_COMPARISON_ALGO_VERSION,
+    TopicComparisonProfile,
+    compare_topics,
+)
+from analytics_api.topic_evolution import (
+    EvolutionEvent,
+    TimelinePoint,
+    TopicEntity,
+    TopicMessage,
+    build_timeline_points,
+    detect_evolution_events,
+    floor_bucket,
+    normalize_bucket_size,
 )
 
 
@@ -149,6 +170,7 @@ SELECT
     rm.event_id,
     rm.channel,
     rm.message_id,
+    rm.permalink,
     rm.text,
     rm.message_date,
     COALESCE(rm.views, 0) AS views,
@@ -220,6 +242,152 @@ GROUP BY bucket
 ORDER BY bucket ASC;
 """
 
+SELECT_TOPIC_TIMELINE_MESSAGES_SQL = f"""
+SELECT
+    ca.run_id,
+    rm.event_id,
+    rm.channel,
+    rm.message_date,
+    lower(COALESCE(sr.sentiment_label, 'neutral')) AS sentiment_label,
+    {SIGNED_SENTIMENT_SQL} AS signed_sentiment
+FROM cluster_assignments ca
+JOIN raw_messages rm ON rm.event_id = ca.event_id
+LEFT JOIN sentiment_results sr ON sr.event_id = ca.event_id
+WHERE ca.public_cluster_id = $1
+  AND ca.cluster_id >= 0
+  AND rm.message_date >= $2
+  AND rm.message_date <= $3
+ORDER BY rm.message_date ASC, rm.event_id ASC;
+"""
+
+SELECT_TOPIC_TIMELINE_ENTITIES_SQL = """
+SELECT
+    nr.event_id,
+    lower(COALESCE(nr.normalized_text, nr.entity_text)) AS entity_key,
+    COALESCE(max(nr.normalized_text), min(nr.entity_text)) AS entity_text,
+    nr.entity_type,
+    count(*) AS mention_count
+FROM ner_results nr
+WHERE nr.event_id = ANY($1::varchar[])
+GROUP BY nr.event_id, lower(COALESCE(nr.normalized_text, nr.entity_text)), nr.entity_type
+ORDER BY nr.event_id ASC, mention_count DESC, entity_text ASC;
+"""
+
+SELECT_TOPIC_TIMELINE_POINTS_SQL = """
+SELECT
+    bucket_start,
+    bucket_end,
+    message_count,
+    unique_channel_count,
+    top_entities_json,
+    sentiment_json,
+    new_channels_json,
+    event_ids_json,
+    calculated_at
+FROM topic_timeline_points
+WHERE public_cluster_id = $1
+  AND bucket_size = $2
+  AND bucket_start >= $3
+  AND bucket_start <= $4
+ORDER BY bucket_start ASC;
+"""
+
+SELECT_TOPIC_EVOLUTION_EVENTS_SQL = """
+SELECT
+    event_type,
+    event_time,
+    bucket_start,
+    severity,
+    summary,
+    details_json,
+    created_at
+FROM topic_evolution_events
+WHERE public_cluster_id = $1
+  AND bucket_size = $2
+  AND event_time >= $3
+  AND event_time <= $4
+ORDER BY event_time ASC, event_type ASC;
+"""
+
+DELETE_TOPIC_TIMELINE_POINTS_SQL = """
+DELETE FROM topic_timeline_points
+WHERE public_cluster_id = $1
+  AND bucket_size = $2
+  AND bucket_start >= $3
+  AND bucket_start <= $4;
+"""
+
+DELETE_TOPIC_EVOLUTION_EVENTS_SQL = """
+DELETE FROM topic_evolution_events
+WHERE public_cluster_id = $1
+  AND bucket_size = $2
+  AND event_time >= $3
+  AND event_time <= $4;
+"""
+
+INSERT_TOPIC_TIMELINE_POINT_SQL = """
+INSERT INTO topic_timeline_points (
+    public_cluster_id,
+    run_id,
+    bucket_size,
+    bucket_start,
+    bucket_end,
+    message_count,
+    unique_channel_count,
+    top_entities_json,
+    sentiment_json,
+    new_channels_json,
+    event_ids_json,
+    calculated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, NOW())
+ON CONFLICT (public_cluster_id, bucket_size, bucket_start) DO UPDATE SET
+    run_id = EXCLUDED.run_id,
+    bucket_end = EXCLUDED.bucket_end,
+    message_count = EXCLUDED.message_count,
+    unique_channel_count = EXCLUDED.unique_channel_count,
+    top_entities_json = EXCLUDED.top_entities_json,
+    sentiment_json = EXCLUDED.sentiment_json,
+    new_channels_json = EXCLUDED.new_channels_json,
+    event_ids_json = EXCLUDED.event_ids_json,
+    calculated_at = EXCLUDED.calculated_at;
+"""
+
+INSERT_TOPIC_EVOLUTION_EVENT_SQL = """
+INSERT INTO topic_evolution_events (
+    public_cluster_id,
+    run_id,
+    bucket_size,
+    event_type,
+    event_time,
+    bucket_start,
+    severity,
+    summary,
+    details_json,
+    created_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW())
+ON CONFLICT (public_cluster_id, bucket_size, event_type, bucket_start, summary) DO UPDATE SET
+    run_id = EXCLUDED.run_id,
+    event_time = EXCLUDED.event_time,
+    severity = EXCLUDED.severity,
+    details_json = EXCLUDED.details_json,
+    created_at = EXCLUDED.created_at;
+"""
+
+INSERT_TOPIC_TIMELINE_REBUILD_RUN_SQL = """
+INSERT INTO topic_timeline_rebuild_runs (
+    public_cluster_id,
+    run_id,
+    bucket_size,
+    window_start,
+    window_end,
+    points_written,
+    events_written,
+    status,
+    error_message,
+    finished_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW());
+"""
+
 SELECT_PROPAGATION_LINKS_SQL = """
 SELECT
     mpl.child_event_id,
@@ -240,6 +408,136 @@ LEFT JOIN raw_messages child_rm ON child_rm.event_id = mpl.child_event_id
 LEFT JOIN raw_messages parent_rm ON parent_rm.event_id = mpl.parent_event_id
 WHERE mpl.public_cluster_id = $1
 ORDER BY child_rm.message_date ASC NULLS LAST, mpl.child_event_id ASC;
+"""
+
+SELECT_TOPIC_SCORES_FOR_RUN_SQL = """
+SELECT
+    public_cluster_id,
+    importance_score,
+    importance_level,
+    score_breakdown_json,
+    calculated_at
+FROM topic_scores_latest
+WHERE run_id = $1;
+"""
+
+SELECT_TOPIC_SCORE_FOR_CLUSTER_SQL = """
+SELECT
+    importance_score,
+    importance_level,
+    score_breakdown_json,
+    calculated_at
+FROM topic_scores_latest
+WHERE public_cluster_id = $1
+LIMIT 1;
+"""
+
+SELECT_TOPIC_COMPARISON_CACHE_SQL = """
+SELECT result_json
+FROM topic_comparison_cache
+WHERE cache_key = $1
+  AND expires_at > NOW();
+"""
+
+UPSERT_TOPIC_COMPARISON_CACHE_SQL = """
+INSERT INTO topic_comparison_cache (
+    cache_key,
+    cluster_a_id,
+    cluster_b_id,
+    window_start,
+    window_end,
+    algorithm_version,
+    result_json,
+    computed_at,
+    expires_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7::jsonb, NOW(), NOW() + ($8::text)::interval
+)
+ON CONFLICT (cache_key) DO UPDATE SET
+    cluster_a_id = EXCLUDED.cluster_a_id,
+    cluster_b_id = EXCLUDED.cluster_b_id,
+    window_start = EXCLUDED.window_start,
+    window_end = EXCLUDED.window_end,
+    algorithm_version = EXCLUDED.algorithm_version,
+    result_json = EXCLUDED.result_json,
+    computed_at = EXCLUDED.computed_at,
+    expires_at = EXCLUDED.expires_at;
+"""
+
+SELECT_TOPIC_COMPARE_PROFILE_SQL = f"""
+SELECT
+    ca.public_cluster_id,
+    count(*) AS message_count,
+    COALESCE(avg({SIGNED_SENTIMENT_SQL}), 0) AS avg_sentiment,
+    min(rm.message_date) AS first_seen,
+    max(rm.message_date) AS last_seen
+FROM cluster_assignments ca
+JOIN raw_messages rm ON rm.event_id = ca.event_id
+LEFT JOIN sentiment_results sr ON sr.event_id = ca.event_id
+WHERE ca.public_cluster_id = $1
+  AND ca.cluster_id >= 0
+  AND rm.message_date >= $2
+  AND rm.message_date <= $3
+GROUP BY ca.public_cluster_id;
+"""
+
+SELECT_TOPIC_COMPARE_ENTITIES_SQL = """
+SELECT
+    lower(COALESCE(nr.normalized_text, nr.entity_text)) AS entity_key,
+    COALESCE(max(nr.normalized_text), min(nr.entity_text)) AS entity_text,
+    nr.entity_type,
+    count(*) AS mention_count
+FROM cluster_assignments ca
+JOIN raw_messages rm ON rm.event_id = ca.event_id
+JOIN ner_results nr ON nr.event_id = ca.event_id
+WHERE ca.public_cluster_id = $1
+  AND ca.cluster_id >= 0
+  AND rm.message_date >= $2
+  AND rm.message_date <= $3
+GROUP BY lower(COALESCE(nr.normalized_text, nr.entity_text)), nr.entity_type
+ORDER BY mention_count DESC, entity_text ASC
+LIMIT 100;
+"""
+
+SELECT_TOPIC_COMPARE_CHANNELS_SQL = """
+SELECT rm.channel, count(*) AS message_count
+FROM cluster_assignments ca
+JOIN raw_messages rm ON rm.event_id = ca.event_id
+WHERE ca.public_cluster_id = $1
+  AND ca.cluster_id >= 0
+  AND rm.message_date >= $2
+  AND rm.message_date <= $3
+GROUP BY rm.channel
+ORDER BY message_count DESC, rm.channel ASC
+LIMIT 100;
+"""
+
+SELECT_TOPIC_COMPARE_MESSAGES_SQL = f"""
+SELECT
+    rm.event_id,
+    rm.channel,
+    rm.message_id,
+    rm.permalink,
+    rm.text,
+    rm.message_date,
+    COALESCE(rm.views, 0) AS views,
+    COALESCE(rm.forwards, 0) AS forwards,
+    pm.normalized_text_hash,
+    pm.primary_url_fingerprint,
+    pm.simhash64,
+    {SIGNED_SENTIMENT_SQL} AS signed_sentiment
+FROM cluster_assignments ca
+JOIN raw_messages rm ON rm.event_id = ca.event_id
+LEFT JOIN preprocessed_messages pm ON pm.event_id = ca.event_id
+LEFT JOIN sentiment_results sr ON sr.event_id = ca.event_id
+WHERE ca.public_cluster_id = $1
+  AND ca.cluster_id >= 0
+  AND rm.message_date >= $2
+  AND rm.message_date <= $3
+ORDER BY (COALESCE(rm.views, 0) + COALESCE(rm.forwards, 0) * 25) DESC,
+         rm.message_date DESC,
+         rm.event_id DESC
+LIMIT $4;
 """
 
 SELECT_RELATED_CLUSTERS_SQL = """
@@ -351,6 +649,7 @@ SELECT
     rm.event_id,
     rm.channel,
     rm.message_id,
+    rm.permalink,
     rm.text,
     rm.message_date,
     COALESCE(rm.views, 0) AS views,
@@ -376,6 +675,34 @@ WHERE rm.message_date >= $2
   AND ($7::varchar IS NULL OR lower(COALESCE(sr.sentiment_label, 'neutral')) = $7::varchar)
 ORDER BY rm.message_date DESC, rm.event_id DESC
 LIMIT $8 OFFSET $9;
+"""
+
+SELECT_MESSAGE_BY_EVENT_ID_SQL = f"""
+SELECT
+    rm.event_id,
+    rm.channel,
+    rm.message_id,
+    rm.permalink,
+    rm.text,
+    rm.message_date,
+    COALESCE(rm.views, 0) AS views,
+    COALESCE(rm.forwards, 0) AS forwards,
+    ca.public_cluster_id,
+    lower(COALESCE(sr.sentiment_label, 'neutral')) AS sentiment_label,
+    COALESCE(sr.sentiment_score, 0) AS sentiment_confidence,
+    COALESCE(sr.positive_prob, 0) AS positive_prob,
+    COALESCE(sr.negative_prob, 0) AS negative_prob,
+    COALESCE(sr.neutral_prob, 0) AS neutral_prob,
+    {SIGNED_SENTIMENT_SQL} AS ui_sentiment_score
+FROM raw_messages rm
+LEFT JOIN cluster_assignments ca
+  ON ca.event_id = rm.event_id
+ AND ca.run_id = $1
+ AND ca.cluster_id >= 0
+LEFT JOIN sentiment_results sr ON sr.event_id = rm.event_id
+WHERE rm.event_id = $2
+  AND ($3::varchar IS NULL OR ca.public_cluster_id = $3::varchar)
+LIMIT 1;
 """
 
 SELECT_CLUSTER_SOURCE_BY_CLUSTER_SQL = """
@@ -624,6 +951,7 @@ class AnalyticsApiService:
         self._health_site: Optional[web.TCPSite] = None
         self._metrics_site: Optional[web.TCPSite] = None
         self._stop_event = asyncio.Event()
+        self._llm_client: Optional[httpx.AsyncClient] = None
 
     async def start(self) -> None:
         self._pool = await asyncpg.create_pool(
@@ -632,6 +960,11 @@ class AnalyticsApiService:
             max_size=self._config.postgres.max_size,
             command_timeout=self._config.postgres.command_timeout,
         )
+        if self._config.llm_enricher.enabled:
+            self._llm_client = httpx.AsyncClient(
+                base_url=self._config.llm_enricher.url,
+                timeout=httpx.Timeout(self._config.llm_enricher.refresh_timeout_seconds),
+            )
 
         @web.middleware
         async def cors_middleware(request: web.Request, handler):
@@ -699,8 +1032,20 @@ class AnalyticsApiService:
             self._handle_cluster_related,
         )
         app.router.add_get(
+            "/analytics/clusters/{clusterId}/compare/{otherClusterId}",
+            self._handle_cluster_compare,
+        )
+        app.router.add_get(
             "/analytics/clusters/{clusterId}/graph-metrics",
             self._handle_cluster_graph_metrics,
+        )
+        app.router.add_get(
+            "/analytics/clusters/{clusterId}/timeline",
+            self._handle_cluster_timeline,
+        )
+        app.router.add_get(
+            "/analytics/clusters/{clusterId}/evolution-events",
+            self._handle_cluster_evolution_events,
         )
         app.router.add_get("/analytics/entities/top", self._handle_top_entities)
         app.router.add_get(
@@ -709,6 +1054,14 @@ class AnalyticsApiService:
         )
         app.router.add_get("/analytics/messages", self._handle_messages)
         app.router.add_get("/analytics/graph", self._handle_graph)
+        app.router.add_get(
+            "/analytics/clusters/{clusterId}/llm/{enrichmentType}",
+            self._handle_cluster_llm_enrichment,
+        )
+        app.router.add_post(
+            "/analytics/clusters/{clusterId}/llm/{enrichmentType}/refresh",
+            self._handle_cluster_llm_refresh,
+        )
 
         self._web_runner = web.AppRunner(app)
         await self._web_runner.setup()
@@ -743,6 +1096,8 @@ class AnalyticsApiService:
             await self._pool.close()
         if self._web_runner is not None:
             await self._web_runner.cleanup()
+        if self._llm_client is not None:
+            await self._llm_client.aclose()
         logger.info("analytics api stopped")
 
     async def run(self) -> None:
@@ -816,6 +1171,11 @@ class AnalyticsApiService:
     async def _handle_clusters(self, request: web.Request) -> web.Response:
         from_dt, to_dt = self._parse_time_range(request)
         channel = request.query.get("channel")
+        sort_by = request.query.get("sort_by", "messages")
+        if sort_by not in {"messages", "importance", "recency"}:
+            sort_by = "messages"
+        min_importance = request.query.get("min_importance")
+        importance_levels_param = request.query.get("importance_level")
         async with self._conn() as conn:
             topics = await self._build_cluster_overview_list(conn, from_dt, to_dt)
 
@@ -825,6 +1185,27 @@ class AnalyticsApiService:
                 for topic in topics
                 if any(item["channel"] == channel for item in topic["channels"])
             ]
+
+        if min_importance is not None:
+            try:
+                threshold = float(min_importance)
+                topics = [t for t in topics if (t.get("importance_score") or 0.0) >= threshold]
+            except ValueError:
+                pass
+
+        if importance_levels_param:
+            allowed = {lvl.strip().lower() for lvl in importance_levels_param.split(",")}
+            topics = [t for t in topics if t.get("importance_level") in allowed]
+
+        if sort_by == "importance":
+            topics.sort(key=lambda t: t.get("importance_score") or 0.0, reverse=True)
+        elif sort_by == "recency":
+            topics.sort(
+                key=lambda t: t.get("last_seen") or "",
+                reverse=True,
+            )
+        # default "messages" order comes from SQL ORDER BY message_count DESC
+
         return web.json_response(topics)
 
     async def _handle_cluster_detail(self, request: web.Request) -> web.Response:
@@ -872,6 +1253,26 @@ class AnalyticsApiService:
             related = await self._build_related_topics(conn, cluster_id, from_dt, to_dt)
         return web.json_response(related)
 
+    async def _handle_cluster_compare(self, request: web.Request) -> web.Response:
+        cluster_id = _decode_cluster_id(request.match_info["clusterId"])
+        other_cluster_id = _decode_cluster_id(request.match_info["otherClusterId"])
+        if not cluster_id or not other_cluster_id:
+            raise web.HTTPBadRequest(text="both cluster ids are required")
+        from_dt, to_dt = self._parse_time_range(request)
+        refresh = request.query.get("refresh") in {"1", "true", "yes"}
+        async with self._conn() as conn:
+            payload = await self._build_topic_comparison(
+                conn,
+                cluster_id,
+                other_cluster_id,
+                from_dt,
+                to_dt,
+                refresh=refresh,
+            )
+        if payload is None:
+            raise web.HTTPNotFound(text=f"cluster not found: {cluster_id} or {other_cluster_id}")
+        return web.json_response(payload)
+
     async def _handle_cluster_graph_metrics(self, request: web.Request) -> web.Response:
         cluster_id = _decode_cluster_id(request.match_info["clusterId"])
         from_dt, to_dt = self._parse_time_range(request)
@@ -881,6 +1282,48 @@ class AnalyticsApiService:
         if payload is None:
             raise web.HTTPNotFound(text=f"cluster not found: {cluster_id}")
         return web.json_response(payload)
+
+    async def _handle_cluster_timeline(self, request: web.Request) -> web.Response:
+        cluster_id = _decode_cluster_id(request.match_info["clusterId"])
+        from_dt, to_dt = self._parse_time_range(request)
+        try:
+            bucket_size = normalize_bucket_size(request.query.get("bucket"))
+        except ValueError as exc:
+            raise web.HTTPBadRequest(text=str(exc)) from exc
+        refresh = request.query.get("refresh") in {"1", "true", "yes"}
+        async with self._conn() as conn:
+            payload = await self._build_topic_timeline_payload(
+                conn,
+                cluster_id,
+                from_dt,
+                to_dt,
+                bucket_size,
+                refresh=refresh,
+            )
+        if payload is None:
+            raise web.HTTPNotFound(text=f"cluster not found: {cluster_id}")
+        return web.json_response(payload)
+
+    async def _handle_cluster_evolution_events(self, request: web.Request) -> web.Response:
+        cluster_id = _decode_cluster_id(request.match_info["clusterId"])
+        from_dt, to_dt = self._parse_time_range(request)
+        try:
+            bucket_size = normalize_bucket_size(request.query.get("bucket"))
+        except ValueError as exc:
+            raise web.HTTPBadRequest(text=str(exc)) from exc
+        refresh = request.query.get("refresh") in {"1", "true", "yes"}
+        async with self._conn() as conn:
+            payload = await self._build_topic_timeline_payload(
+                conn,
+                cluster_id,
+                from_dt,
+                to_dt,
+                bucket_size,
+                refresh=refresh,
+            )
+        if payload is None:
+            raise web.HTTPNotFound(text=f"cluster not found: {cluster_id}")
+        return web.json_response(payload["events"])
 
     async def _handle_top_entities(self, request: web.Request) -> web.Response:
         from_dt, to_dt = self._parse_time_range(request)
@@ -1000,6 +1443,8 @@ class AnalyticsApiService:
                     cluster_id,
                     from_dt,
                     to_dt,
+                    focus,
+                    depth,
                 )
             else:
                 payload = await self._build_overview_graph(
@@ -1010,6 +1455,62 @@ class AnalyticsApiService:
                     depth,
                 )
         return web.json_response(payload)
+
+    # ── LLM Enrichment proxy ─────────────────────────────────────────
+
+    async def _handle_cluster_llm_enrichment(self, request: web.Request) -> web.Response:
+        """GET /analytics/clusters/{clusterId}/llm/{enrichmentType}
+        Proxies to llm_enricher with refresh=false and a short timeout.
+        Returns 202 if enricher is computing (timeout exceeded).
+        """
+        cluster_id = _decode_cluster_id(request.match_info["clusterId"])
+        enrichment_type = request.match_info["enrichmentType"]
+        return await self._proxy_llm_enrichment(cluster_id, enrichment_type, refresh=False)
+
+    async def _handle_cluster_llm_refresh(self, request: web.Request) -> web.Response:
+        """POST /analytics/clusters/{clusterId}/llm/{enrichmentType}/refresh
+        Forces recomputation with a longer timeout.
+        """
+        cluster_id = _decode_cluster_id(request.match_info["clusterId"])
+        enrichment_type = request.match_info["enrichmentType"]
+        return await self._proxy_llm_enrichment(cluster_id, enrichment_type, refresh=True)
+
+    async def _proxy_llm_enrichment(
+        self, cluster_id: str, enrichment_type: str, *, refresh: bool
+    ) -> web.Response:
+        if not self._config.llm_enricher.enabled or self._llm_client is None:
+            return web.json_response(
+                {"error": "LLM enrichment is not enabled on this instance"}, status=503
+            )
+        timeout = (
+            self._config.llm_enricher.refresh_timeout_seconds
+            if refresh
+            else self._config.llm_enricher.timeout_seconds
+        )
+        try:
+            resp = await self._llm_client.post(
+                f"/enrich/{enrichment_type}",
+                json={"public_cluster_id": cluster_id, "refresh": refresh},
+                timeout=timeout,
+            )
+            if resp.status_code == 404:
+                return web.json_response({"error": "Enrichment type not found"}, status=404)
+            data = resp.json()
+            return web.json_response(data, status=resp.status_code)
+        except httpx.TimeoutException:
+            if not refresh:
+                return web.json_response(
+                    {
+                        "status": "pending",
+                        "message": "LLM enrichment is being computed. Poll this endpoint again shortly.",
+                        "is_llm_generated": True,
+                    },
+                    status=202,
+                )
+            return web.json_response({"error": "LLM enricher timed out"}, status=504)
+        except Exception as exc:
+            logger.error("LLM enricher proxy error cluster=%s type=%s: %s", cluster_id, enrichment_type, exc)
+            return web.json_response({"error": "LLM enricher unavailable"}, status=503)
 
     async def _build_cluster_overview_list(
         self,
@@ -1039,6 +1540,10 @@ class AnalyticsApiService:
             to_dt,
         )
         resolution_rows = await conn.fetch(SELECT_CLUSTER_SOURCE_RESOLUTIONS_SQL, run_id)
+        try:
+            score_rows = await conn.fetch(SELECT_TOPIC_SCORES_FOR_RUN_SQL, run_id)
+        except asyncpg.UndefinedTableError:
+            score_rows = []
 
         dates_by_cluster: dict[str, list[datetime]] = defaultdict(list)
         for row in date_rows:
@@ -1076,6 +1581,14 @@ class AnalyticsApiService:
                 _build_resolution_payload(row, row["resolution_kind"]) or {}
             )
 
+        scores_by_cluster: dict[str, dict[str, Any]] = {}
+        for row in score_rows:
+            scores_by_cluster[row["public_cluster_id"]] = {
+                "importance_score": round(float(row["importance_score"]), 4),
+                "importance_level": row["importance_level"],
+                "score_calculated_at": _utc_iso(row["calculated_at"]),
+            }
+
         topics: list[dict[str, Any]] = []
         for row in base_rows:
             public_cluster_id = row["public_cluster_id"]
@@ -1084,6 +1597,7 @@ class AnalyticsApiService:
             exact = resolutions_by_cluster.get(public_cluster_id, {}).get("exact")
             inferred = resolutions_by_cluster.get(public_cluster_id, {}).get("inferred")
             label = self._topic_label(public_cluster_id, cluster_entities, exact, inferred)
+            score_data = scores_by_cluster.get(public_cluster_id, {})
             topics.append(
                 {
                     "cluster_id": public_cluster_id,
@@ -1106,6 +1620,9 @@ class AnalyticsApiService:
                     ),
                     "channels": cluster_channels,
                     "source_status": _source_status(exact, inferred),
+                    "importance_score": score_data.get("importance_score"),
+                    "importance_level": score_data.get("importance_level"),
+                    "score_calculated_at": score_data.get("score_calculated_at"),
                 }
             )
         return topics
@@ -1153,6 +1670,10 @@ class AnalyticsApiService:
         representative_messages = await self._build_messages_payload_from_rows(conn, docs_rows)
         first_source = await self._build_first_source_payload(conn, cluster_id)
         related_topics = await self._build_related_topics(conn, cluster_id, from_dt, to_dt)
+        try:
+            score_row = await conn.fetchrow(SELECT_TOPIC_SCORE_FOR_CLUSTER_SQL, cluster_id)
+        except asyncpg.UndefinedTableError:
+            score_row = None
 
         top_entities = [
             {
@@ -1201,6 +1722,10 @@ class AnalyticsApiService:
             ],
             "first_source": first_source,
             "source_status": first_source["source_status"] if first_source else "unknown",
+            "importance_score": round(float(score_row["importance_score"]), 4) if score_row else None,
+            "importance_level": score_row["importance_level"] if score_row else None,
+            "score_breakdown": json.loads(score_row["score_breakdown_json"]) if score_row else None,
+            "score_calculated_at": _utc_iso(score_row["calculated_at"]) if score_row else None,
         }
 
     async def _build_first_source_payload(
@@ -1257,6 +1782,469 @@ class AnalyticsApiService:
             "propagation_chain": propagation_chain,
         }
 
+    async def _build_topic_timeline_payload(
+        self,
+        conn: asyncpg.Connection,
+        cluster_id: str,
+        from_dt: datetime,
+        to_dt: datetime,
+        bucket_size: str,
+        refresh: bool = False,
+    ) -> Optional[dict[str, Any]]:
+        bucket_size = normalize_bucket_size(bucket_size)
+        if refresh:
+            rebuild = await self._rebuild_topic_timeline(
+                conn,
+                cluster_id,
+                from_dt,
+                to_dt,
+                bucket_size,
+            )
+            if rebuild is None:
+                return None
+        else:
+            exists = await conn.fetchval(
+                "SELECT 1 FROM cluster_assignments WHERE public_cluster_id = $1 LIMIT 1;",
+                cluster_id,
+            )
+            if exists is None:
+                return None
+
+        try:
+            storage_from = floor_bucket(from_dt, bucket_size)
+            point_rows = await conn.fetch(
+                SELECT_TOPIC_TIMELINE_POINTS_SQL,
+                cluster_id,
+                bucket_size,
+                storage_from,
+                to_dt,
+            )
+            if not point_rows and not refresh:
+                rebuild = await self._rebuild_topic_timeline(
+                    conn,
+                    cluster_id,
+                    from_dt,
+                    to_dt,
+                    bucket_size,
+                )
+                if rebuild is None:
+                    return None
+                point_rows = await conn.fetch(
+                    SELECT_TOPIC_TIMELINE_POINTS_SQL,
+                    cluster_id,
+                    bucket_size,
+                    storage_from,
+                    to_dt,
+                )
+            event_rows = await conn.fetch(
+                SELECT_TOPIC_EVOLUTION_EVENTS_SQL,
+                cluster_id,
+                bucket_size,
+                storage_from,
+                to_dt,
+            )
+        except asyncpg.exceptions.UndefinedTableError:
+            logger.warning("topic timeline tables are not migrated yet")
+            return {
+                "cluster_id": cluster_id,
+                "bucket_size": bucket_size,
+                "points": [],
+                "events": [],
+                "generated_at": _utc_iso(datetime.now(timezone.utc)),
+                "storage_status": "migration_required",
+            }
+
+        return {
+            "cluster_id": cluster_id,
+            "bucket_size": bucket_size,
+            "points": [self._timeline_point_payload(row) for row in point_rows],
+            "events": [self._evolution_event_payload(row) for row in event_rows],
+            "generated_at": _utc_iso(datetime.now(timezone.utc)),
+            "storage_status": "ready",
+        }
+
+    async def _rebuild_topic_timeline(
+        self,
+        conn: asyncpg.Connection,
+        cluster_id: str,
+        from_dt: datetime,
+        to_dt: datetime,
+        bucket_size: str,
+    ) -> Optional[dict[str, int]]:
+        started = time.monotonic()
+        run_id: Optional[str] = None
+        try:
+            message_rows = await conn.fetch(
+                SELECT_TOPIC_TIMELINE_MESSAGES_SQL,
+                cluster_id,
+                from_dt,
+                to_dt,
+            )
+            if not message_rows:
+                exists = await conn.fetchval(
+                    "SELECT 1 FROM cluster_assignments WHERE public_cluster_id = $1 LIMIT 1;",
+                    cluster_id,
+                )
+                if exists is None:
+                    return None
+
+            run_id = message_rows[0]["run_id"] if message_rows else None
+            messages = [
+                TopicMessage(
+                    event_id=row["event_id"],
+                    channel=row["channel"],
+                    message_date=row["message_date"],
+                    sentiment_label=row["sentiment_label"],
+                    signed_sentiment=float(row["signed_sentiment"] or 0),
+                )
+                for row in message_rows
+            ]
+            event_ids = [message.event_id for message in messages]
+            entity_rows = (
+                await conn.fetch(SELECT_TOPIC_TIMELINE_ENTITIES_SQL, event_ids)
+                if event_ids
+                else []
+            )
+            entities_by_event: dict[str, list[TopicEntity]] = defaultdict(list)
+            for row in entity_rows:
+                entities_by_event[row["event_id"]].append(
+                    TopicEntity(
+                        event_id=row["event_id"],
+                        entity_key=row["entity_key"],
+                        entity_text=row["entity_text"],
+                        entity_type=row["entity_type"],
+                        mention_count=int(row["mention_count"] or 1),
+                    )
+                )
+
+            points = build_timeline_points(messages, entities_by_event, bucket_size)
+            events = detect_evolution_events(points)
+
+            async with conn.transaction():
+                storage_from = floor_bucket(from_dt, bucket_size)
+                await conn.execute(
+                    DELETE_TOPIC_TIMELINE_POINTS_SQL,
+                    cluster_id,
+                    bucket_size,
+                    storage_from,
+                    to_dt,
+                )
+                await conn.execute(
+                    DELETE_TOPIC_EVOLUTION_EVENTS_SQL,
+                    cluster_id,
+                    bucket_size,
+                    storage_from,
+                    to_dt,
+                )
+                for point in points:
+                    await self._store_timeline_point(conn, cluster_id, run_id, bucket_size, point)
+                for event in events:
+                    await self._store_evolution_event(conn, cluster_id, run_id, bucket_size, event)
+                await conn.execute(
+                    INSERT_TOPIC_TIMELINE_REBUILD_RUN_SQL,
+                    cluster_id,
+                    run_id,
+                    bucket_size,
+                    from_dt,
+                    to_dt,
+                    len(points),
+                    len(events),
+                    "completed",
+                    None,
+                )
+            TOPIC_TIMELINE_REBUILDS_TOTAL.labels(
+                status="success",
+                bucket_size=bucket_size,
+            ).inc()
+            logger.info(
+                "topic timeline rebuilt cluster_id=%s bucket=%s points=%s events=%s",
+                cluster_id,
+                bucket_size,
+                len(points),
+                len(events),
+            )
+            return {"points": len(points), "events": len(events)}
+        except asyncpg.exceptions.UndefinedTableError:
+            logger.warning("skipping topic timeline rebuild because tables are not migrated")
+            return {"points": 0, "events": 0}
+        except Exception as exc:
+            TOPIC_TIMELINE_REBUILDS_TOTAL.labels(
+                status="error",
+                bucket_size=bucket_size,
+            ).inc()
+            logger.exception("topic timeline rebuild failed cluster_id=%s", cluster_id)
+            try:
+                await conn.execute(
+                    INSERT_TOPIC_TIMELINE_REBUILD_RUN_SQL,
+                    cluster_id,
+                    run_id,
+                    bucket_size,
+                    from_dt,
+                    to_dt,
+                    0,
+                    0,
+                    "failed",
+                    str(exc)[:1000],
+                )
+            except Exception:
+                logger.debug("failed to persist topic timeline rebuild error", exc_info=True)
+            raise
+        finally:
+            TOPIC_TIMELINE_REBUILD_DURATION.labels(bucket_size=bucket_size).observe(
+                time.monotonic() - started
+            )
+
+    async def _store_timeline_point(
+        self,
+        conn: asyncpg.Connection,
+        cluster_id: str,
+        run_id: Optional[str],
+        bucket_size: str,
+        point: TimelinePoint,
+    ) -> None:
+        await conn.execute(
+            INSERT_TOPIC_TIMELINE_POINT_SQL,
+            cluster_id,
+            run_id,
+            bucket_size,
+            point.bucket_start,
+            point.bucket_end,
+            point.message_count,
+            point.unique_channel_count,
+            json.dumps(point.top_entities),
+            json.dumps(point.sentiment),
+            json.dumps(point.new_channels),
+            json.dumps(point.event_ids),
+        )
+
+    async def _store_evolution_event(
+        self,
+        conn: asyncpg.Connection,
+        cluster_id: str,
+        run_id: Optional[str],
+        bucket_size: str,
+        event: EvolutionEvent,
+    ) -> None:
+        await conn.execute(
+            INSERT_TOPIC_EVOLUTION_EVENT_SQL,
+            cluster_id,
+            run_id,
+            bucket_size,
+            event.event_type,
+            event.event_time,
+            event.bucket_start,
+            float(event.severity),
+            event.summary,
+            json.dumps(event.details),
+        )
+
+    async def _build_topic_comparison(
+        self,
+        conn: asyncpg.Connection,
+        cluster_a_id: str,
+        cluster_b_id: str,
+        from_dt: datetime,
+        to_dt: datetime,
+        refresh: bool = False,
+    ) -> Optional[dict[str, Any]]:
+        cache_key = self._topic_comparison_cache_key(cluster_a_id, cluster_b_id, from_dt, to_dt)
+        if not refresh:
+            cached = await self._load_topic_comparison_cache(conn, cache_key)
+            if cached is not None:
+                TOPIC_COMPARISON_CACHE_TOTAL.labels(result="hit").inc()
+                return cached
+            TOPIC_COMPARISON_CACHE_TOTAL.labels(result="miss").inc()
+
+        started = time.monotonic()
+        try:
+            left = await self._build_topic_compare_profile(conn, cluster_a_id, from_dt, to_dt)
+            right = await self._build_topic_compare_profile(conn, cluster_b_id, from_dt, to_dt)
+            if left is None or right is None:
+                return None
+
+            payload = compare_topics(left, right)
+            payload["window"] = {"from": _utc_iso(from_dt), "to": _utc_iso(to_dt)}
+            payload["cached"] = False
+            await self._store_topic_comparison_cache(
+                conn,
+                cache_key,
+                cluster_a_id,
+                cluster_b_id,
+                from_dt,
+                to_dt,
+                payload,
+            )
+            TOPIC_COMPARISON_RUNS_TOTAL.labels(status="success").inc()
+            return payload
+        except Exception:
+            TOPIC_COMPARISON_RUNS_TOTAL.labels(status="error").inc()
+            logger.exception(
+                "topic comparison failed cluster_a=%s cluster_b=%s",
+                cluster_a_id,
+                cluster_b_id,
+            )
+            raise
+        finally:
+            TOPIC_COMPARISON_DURATION.observe(time.monotonic() - started)
+
+    async def _build_topic_compare_profile(
+        self,
+        conn: asyncpg.Connection,
+        cluster_id: str,
+        from_dt: datetime,
+        to_dt: datetime,
+    ) -> Optional[TopicComparisonProfile]:
+        stats = await conn.fetchrow(SELECT_TOPIC_COMPARE_PROFILE_SQL, cluster_id, from_dt, to_dt)
+        if stats is None or int(stats["message_count"] or 0) == 0:
+            return None
+
+        entity_rows = await conn.fetch(SELECT_TOPIC_COMPARE_ENTITIES_SQL, cluster_id, from_dt, to_dt)
+        channel_rows = await conn.fetch(SELECT_TOPIC_COMPARE_CHANNELS_SQL, cluster_id, from_dt, to_dt)
+        message_rows = await conn.fetch(
+            SELECT_TOPIC_COMPARE_MESSAGES_SQL,
+            cluster_id,
+            from_dt,
+            to_dt,
+            25,
+        )
+
+        entities: dict[str, int] = {}
+        entity_labels: dict[str, dict[str, Any]] = {}
+        top_entities: list[dict[str, Any]] = []
+        for row in entity_rows:
+            key = row["entity_key"]
+            mention_count = int(row["mention_count"] or 0)
+            entities[key] = mention_count
+            label = {
+                "text": row["entity_text"],
+                "type": _ui_entity_type(row["entity_type"]),
+            }
+            entity_labels[key] = label
+            if len(top_entities) < 5:
+                top_entities.append(
+                    {
+                        "id": f"{label['type']}:{key}",
+                        "text": label["text"],
+                        "type": label["type"],
+                        "mention_count": mention_count,
+                    }
+                )
+
+        channels = {
+            row["channel"]: int(row["message_count"] or 0)
+            for row in channel_rows
+        }
+        messages = [
+            {
+                "event_id": row["event_id"],
+                "channel": row["channel"],
+                "message_id": row["message_id"],
+                "permalink": row["permalink"],
+                "text": row["text"],
+                "message_date": _utc_iso(row["message_date"]),
+                "views": int(row["views"] or 0),
+                "forwards": int(row["forwards"] or 0),
+                "normalized_text_hash": row["normalized_text_hash"],
+                "primary_url_fingerprint": row["primary_url_fingerprint"],
+                "simhash64": row["simhash64"],
+                "signed_sentiment": round(float(row["signed_sentiment"] or 0), 4),
+            }
+            for row in message_rows
+        ]
+        label = self._topic_label(cluster_id, top_entities, None, None)
+        return TopicComparisonProfile(
+            cluster_id=cluster_id,
+            label=label,
+            message_count=int(stats["message_count"] or 0),
+            first_seen=stats["first_seen"],
+            last_seen=stats["last_seen"],
+            avg_sentiment=float(stats["avg_sentiment"] or 0),
+            entities=entities,
+            entity_labels=entity_labels,
+            channels=channels,
+            messages=messages,
+        )
+
+    async def _load_topic_comparison_cache(
+        self,
+        conn: asyncpg.Connection,
+        cache_key: str,
+    ) -> Optional[dict[str, Any]]:
+        try:
+            cached = await conn.fetchval(SELECT_TOPIC_COMPARISON_CACHE_SQL, cache_key)
+        except asyncpg.exceptions.UndefinedTableError:
+            logger.warning("topic comparison cache table is not migrated yet")
+            return None
+        if cached is None:
+            return None
+        if isinstance(cached, str):
+            payload = json.loads(cached)
+        else:
+            payload = dict(cached)
+        payload["cached"] = True
+        return payload
+
+    async def _store_topic_comparison_cache(
+        self,
+        conn: asyncpg.Connection,
+        cache_key: str,
+        cluster_a_id: str,
+        cluster_b_id: str,
+        from_dt: datetime,
+        to_dt: datetime,
+        payload: dict[str, Any],
+    ) -> None:
+        ttl_seconds = max(60, self._config.api.topic_comparison_cache_ttl_seconds)
+        interval = f"{ttl_seconds} seconds"
+        try:
+            await conn.execute(
+                UPSERT_TOPIC_COMPARISON_CACHE_SQL,
+                cache_key,
+                cluster_a_id,
+                cluster_b_id,
+                from_dt,
+                to_dt,
+                TOPIC_COMPARISON_ALGO_VERSION,
+                json.dumps(payload),
+                interval,
+            )
+        except asyncpg.exceptions.UndefinedTableError:
+            logger.warning("skipping topic comparison cache write because table is not migrated")
+
+    def _timeline_point_payload(self, row: asyncpg.Record) -> dict[str, Any]:
+        return {
+            "bucket_start": _utc_iso(row["bucket_start"]),
+            "bucket_end": _utc_iso(row["bucket_end"]),
+            "message_count": int(row["message_count"] or 0),
+            "unique_channel_count": int(row["unique_channel_count"] or 0),
+            "top_entities": self._json_value(row["top_entities_json"], []),
+            "sentiment": self._json_value(row["sentiment_json"], {}),
+            "new_channels": self._json_value(row["new_channels_json"], []),
+            "event_ids": self._json_value(row["event_ids_json"], []),
+            "calculated_at": _utc_iso(row["calculated_at"]),
+        }
+
+    def _evolution_event_payload(self, row: asyncpg.Record) -> dict[str, Any]:
+        return {
+            "event_type": row["event_type"],
+            "event_time": _utc_iso(row["event_time"]),
+            "bucket_start": _utc_iso(row["bucket_start"]),
+            "severity": round(float(row["severity"] or 0), 4),
+            "summary": row["summary"],
+            "details": self._json_value(row["details_json"], {}),
+            "created_at": _utc_iso(row["created_at"]),
+        }
+
+    def _json_value(self, value: Any, default: Any) -> Any:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return default
+        return value
+
     async def _build_related_topics(
         self,
         conn: asyncpg.Connection,
@@ -1312,6 +2300,7 @@ class AnalyticsApiService:
                     "event_id": event_id,
                     "channel": row["channel"],
                     "message_id": row["message_id"],
+                    "permalink": row["permalink"],
                     "text": row["text"] or "",
                     "date": _utc_iso(row["message_date"]),
                     "views": int(row["views"] or 0),
@@ -1422,6 +2411,13 @@ class AnalyticsApiService:
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
         seen_nodes: set[str] = set()
+        messages_by_cluster = await self._overview_messages_by_cluster(
+            conn,
+            [topic["cluster_id"] for topic in topics],
+            from_dt,
+            to_dt,
+            max(1, min(depth, 3)),
+        )
 
         for topic in topics:
             topic_node_id = f"topic-{topic['cluster_id']}"
@@ -1482,6 +2478,30 @@ class AnalyticsApiService:
                     }
                 )
 
+            for message in messages_by_cluster.get(topic["cluster_id"], []):
+                message_node_id = f"msg-{message['event_id']}"
+                if message_node_id not in seen_nodes:
+                    nodes.append(self._message_graph_node(message))
+                    seen_nodes.add(message_node_id)
+                edges.append(
+                    {
+                        "source": topic_node_id,
+                        "target": message_node_id,
+                        "weight": 1,
+                        "type": "contains",
+                    }
+                )
+                channel_id = f"ch-{message['channel']}"
+                if channel_id in seen_nodes:
+                    edges.append(
+                        {
+                            "source": message_node_id,
+                            "target": channel_id,
+                            "weight": max(1, int(message.get("forwards", 0)) + 1),
+                            "type": "published_by",
+                        }
+                    )
+
         return {"nodes": nodes, "edges": edges}
 
     async def _build_propagation_graph(
@@ -1490,6 +2510,8 @@ class AnalyticsApiService:
         cluster_id: str,
         from_dt: datetime,
         to_dt: datetime,
+        focus: Optional[str] = None,
+        depth: int = 2,
     ) -> dict[str, Any]:
         detail = await self._build_topic_detail(conn, cluster_id, from_dt, to_dt)
         if detail is None:
@@ -1500,10 +2522,21 @@ class AnalyticsApiService:
             cluster_id,
             from_dt,
             to_dt,
-            min(30, self._config.api.max_graph_nodes),
+            min(max(10, depth * 10), self._config.api.max_graph_nodes),
             0,
         )
         documents = await self._build_messages_payload_from_rows(conn, doc_rows)
+        focus_event_id = focus.removeprefix("msg-") if focus and focus.startswith("msg-") else None
+        if focus_event_id and all(message["event_id"] != focus_event_id for message in documents):
+            run_id = await self._latest_run_id(conn)
+            focus_row = await conn.fetchrow(
+                SELECT_MESSAGE_BY_EVENT_ID_SQL,
+                run_id,
+                focus_event_id,
+                cluster_id,
+            )
+            if focus_row:
+                documents.extend(await self._build_messages_payload_from_rows(conn, [focus_row]))
         first_source = detail.get("first_source") or {}
         chain = first_source.get("propagation_chain") or []
 
@@ -1523,19 +2556,7 @@ class AnalyticsApiService:
         for message in documents:
             node_id = f"msg-{message['event_id']}"
             if node_id not in seen_nodes:
-                nodes.append(
-                    {
-                        "id": node_id,
-                        "label": self._message_graph_label(message),
-                        "type": "message",
-                        "weight": max(1, int(message.get("forwards", 0)) + 1),
-                        "community": None,
-                        "channel": message["channel"],
-                        "message_id": message["message_id"],
-                        "message_date": message["date"],
-                        "source_status": message.get("source_status"),
-                    }
-                )
+                nodes.append(self._message_graph_node(message))
                 seen_nodes.add(node_id)
             edges.append(
                 {
@@ -1560,7 +2581,10 @@ class AnalyticsApiService:
                         "channel": link["parent_channel"],
                         "message_id": link["parent_message_id"],
                         "message_date": link["parent_message_date"],
+                        "cluster_id": cluster_id,
                         "source_status": "exact" if link["resolution_kind"] == "exact" else "probable",
+                        "source_event_id": None,
+                        "source_channel": None,
                     }
                 )
                 seen_nodes.add(parent_node)
@@ -1575,7 +2599,10 @@ class AnalyticsApiService:
                         "channel": link["child_channel"],
                         "message_id": link["child_message_id"],
                         "message_date": link["child_message_date"],
+                        "cluster_id": cluster_id,
                         "source_status": "exact" if link["resolution_kind"] == "exact" else "probable",
+                        "source_event_id": link["parent_event_id"],
+                        "source_channel": link["parent_channel"],
                     }
                 )
                 seen_nodes.add(child_node)
@@ -1590,6 +2617,36 @@ class AnalyticsApiService:
             )
 
         return {"nodes": nodes, "edges": edges}
+
+    async def _overview_messages_by_cluster(
+        self,
+        conn: asyncpg.Connection,
+        cluster_ids: list[str],
+        from_dt: datetime,
+        to_dt: datetime,
+        limit_per_cluster: int,
+    ) -> dict[str, list[dict[str, Any]]]:
+        if not cluster_ids:
+            return {}
+        rows: list[asyncpg.Record] = []
+        for cluster_id in cluster_ids:
+            rows.extend(
+                await conn.fetch(
+                    SELECT_CLUSTER_DOCUMENTS_SQL,
+                    cluster_id,
+                    from_dt,
+                    to_dt,
+                    limit_per_cluster,
+                    0,
+                )
+            )
+        messages = await self._build_messages_payload_from_rows(conn, rows)
+        by_cluster: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for message in messages:
+            message_cluster_id = message.get("cluster_id")
+            if message_cluster_id:
+                by_cluster[message_cluster_id].append(message)
+        return by_cluster
 
     async def _latest_run_id(self, conn: asyncpg.Connection) -> Optional[str]:
         return await conn.fetchval(SELECT_LATEST_RUN_SQL)
@@ -1620,6 +2677,31 @@ class AnalyticsApiService:
         if snippet:
             return snippet[:80]
         return cluster_id
+
+    def _message_graph_node(self, message: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": f"msg-{message['event_id']}",
+            "label": self._message_graph_label(message),
+            "type": "message",
+            "weight": self._message_graph_weight(message),
+            "community": None,
+            "channel": message["channel"],
+            "message_id": message["message_id"],
+            "message_date": message["date"],
+            "cluster_id": message.get("cluster_id"),
+            "permalink": message.get("permalink"),
+            "source_status": message.get("source_status"),
+            "source_event_id": message.get("source_event_id"),
+            "source_channel": message.get("source_channel"),
+        }
+
+    def _message_graph_weight(self, message: dict[str, Any]) -> int:
+        views = max(0, int(message.get("views", 0) or 0))
+        forwards = max(0, int(message.get("forwards", 0) or 0))
+        if views == 0 and forwards == 0:
+            return 1
+        engagement = views + forwards * 25
+        return max(1, min(6, 1 + int(engagement ** 0.25)))
 
     def _message_graph_label(self, message: dict[str, Any]) -> str:
         text = " ".join((message.get("text") or "").split())
@@ -1762,6 +2844,24 @@ class AnalyticsApiService:
             [
                 ALGO_VERSION,
                 cluster_id,
+                _utc_iso(from_dt) or "",
+                _utc_iso(to_dt) or "",
+            ]
+        )
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _topic_comparison_cache_key(
+        self,
+        cluster_a_id: str,
+        cluster_b_id: str,
+        from_dt: datetime,
+        to_dt: datetime,
+    ) -> str:
+        raw = "|".join(
+            [
+                TOPIC_COMPARISON_ALGO_VERSION,
+                cluster_a_id,
+                cluster_b_id,
                 _utc_iso(from_dt) or "",
                 _utc_iso(to_dt) or "",
             ]

@@ -9,10 +9,28 @@ import { Badge } from "@/components/ui/badge";
 import { Sparkline } from "@/components/ui/sparkline";
 import { SourceStatusBadge } from "@/components/topics/source-status-badge";
 import { useTopics } from "@/lib/use-data";
-import { entityTypeColor } from "@/lib/utils";
-import { LayoutGrid, List, Loader2 } from "lucide-react";
+import { entityTypeColor, cn } from "@/lib/utils";
+import type { ImportanceLevel } from "@/types";
+import { LayoutGrid, List, Loader2, Flame } from "lucide-react";
 import { motion } from "framer-motion";
 import Link from "next/link";
+
+const LEVEL_STYLES: Record<ImportanceLevel, string> = {
+  low: "bg-muted text-muted-foreground",
+  medium: "bg-primary/10 text-primary",
+  high: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  critical: "bg-destructive/15 text-destructive",
+};
+
+function ImportanceBadge({ level, score }: { level?: ImportanceLevel | null; score?: number | null }) {
+  if (!level || score == null) return null;
+  return (
+    <span className={cn("inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide", LEVEL_STYLES[level])}>
+      {level === "critical" && <Flame className="h-2.5 w-2.5" />}
+      {level} {score.toFixed(2)}
+    </span>
+  );
+}
 
 export default function TopicsPage() {
   const { t } = useTranslation();
@@ -60,14 +78,17 @@ export default function TopicsPage() {
                     <Card hover>
                       <div className="flex items-start justify-between">
                         <div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <h3 className="text-base font-semibold text-foreground">{topic.label}</h3>
                             {topic.is_new && <Badge variant="new">NEW</Badge>}
                             {topic.source_status && <SourceStatusBadge status={topic.source_status} />}
                           </div>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            {topic.message_count} {t("topics.messages")} &middot; {topic.channel_count} {t("topics.channels")}
-                          </p>
+                          <div className="mt-1 flex items-center gap-2">
+                            <p className="text-xs text-muted-foreground">
+                              {topic.message_count} {t("topics.messages")} &middot; {topic.channel_count} {t("topics.channels")}
+                            </p>
+                            <ImportanceBadge level={topic.importance_level} score={topic.importance_score} />
+                          </div>
                         </div>
                         <div
                           className="w-3 h-3 rounded-full shrink-0 mt-1"
@@ -121,6 +142,7 @@ export default function TopicsPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-4">
+                      <ImportanceBadge level={topic.importance_level} score={topic.importance_score} />
                       <span className="text-xs text-muted-foreground">{topic.message_count} {t("common.msgs")}</span>
                       <Sparkline data={topic.sparkline} width={60} height={20} />
                       <div

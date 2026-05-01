@@ -32,6 +32,13 @@ services:
       TG_API_ID: "${TG_API_ID}"
       TG_API_HASH: "${TG_API_HASH}"
       TG_STRING_SESSION: "${TG_STRING_SESSION}"
+      TG_PROXY_ENABLED: "${TG_PROXY_ENABLED:-false}"
+      TG_PROXY_SCHEME: "${TG_PROXY_SCHEME:-socks5}"
+      TG_PROXY_HOST: "${TG_PROXY_HOST:-}"
+      TG_PROXY_PORT: "${TG_PROXY_PORT:-}"
+      TG_PROXY_USERNAME: "${TG_PROXY_USERNAME:-}"
+      TG_PROXY_PASSWORD: "${TG_PROXY_PASSWORD:-}"
+      TG_PROXY_RDNS: "${TG_PROXY_RDNS:-true}"
       # Переменные для брокера
       BROKER_HOST: "rabbitmq"
       BROKER_PORT: "5672"

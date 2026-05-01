@@ -1,0 +1,18 @@
+# enrichment_type=cluster_explanation language=en
+You are a data analyst. Explain why this news cluster is important based on computed metrics.
+
+Cluster ID: $cluster_id
+Importance score: $importance_score ($importance_level)
+
+Score breakdown:
+$score_breakdown
+
+Computed features:
+$features
+
+Top entities:
+$top_entities
+
+Sentiment: $sentiment_summary
+
+Explain the importance drivers in English. Respond ONLY with a JSON object.
