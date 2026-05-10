@@ -12,14 +12,12 @@ from typing import Optional
 from uuid import UUID
 
 import asyncpg
-import numpy as np
-import torch
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.structs import OffsetAndMetadata, TopicPartition
 from aiohttp import web
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
+from sentiment_analyzer.backends.base import EmotionScore
 from sentiment_analyzer.config import AppConfig
 from sentiment_analyzer.metrics import (
     MESSAGES_CONSUMED,
@@ -27,6 +25,7 @@ from sentiment_analyzer.metrics import (
     MESSAGES_PROCESSED,
     PROCESSING_LATENCY,
 )
+from sentiment_analyzer.model_router import ModelRouter
 from sentiment_analyzer.schemas import JsonSchemaValidator, SchemaValidationError
 from sentiment_analyzer.utils import decode_kafka_key, parse_iso_datetime, utc_now_iso
 
@@ -93,12 +92,17 @@ INSERT INTO sentiment_results (
     event_timestamp,
     trace_id,
     processing_time_ms,
-    analyzed_at
+    analyzed_at,
+    model_language,
+    emotion_model_name,
+    emotion_model_version,
+    aspects_status
 )
 VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9,
     $10, $11, $12, $13, $14, $15, $16,
-    $17, $18, $19, $20, $21, $22, $23
+    $17, $18, $19, $20, $21, $22, $23,
+    $24, $25, $26, $27
 )
 ON CONFLICT (channel, message_id) DO UPDATE
 SET preprocessed_message_id = EXCLUDED.preprocessed_message_id,
@@ -121,21 +125,13 @@ SET preprocessed_message_id = EXCLUDED.preprocessed_message_id,
     event_timestamp = EXCLUDED.event_timestamp,
     trace_id = EXCLUDED.trace_id,
     processing_time_ms = EXCLUDED.processing_time_ms,
-    analyzed_at = EXCLUDED.analyzed_at
+    analyzed_at = EXCLUDED.analyzed_at,
+    model_language = EXCLUDED.model_language,
+    emotion_model_name = EXCLUDED.emotion_model_name,
+    emotion_model_version = EXCLUDED.emotion_model_version,
+    aspects_status = EXCLUDED.aspects_status
 RETURNING id;
 """
-
-LABEL_MAP = {
-    "LABEL_0": "negative",
-    "LABEL_1": "neutral",
-    "LABEL_2": "positive",
-    "NEGATIVE": "negative",
-    "NEUTRAL": "neutral",
-    "POSITIVE": "positive",
-    "negative": "negative",
-    "neutral": "neutral",
-    "positive": "positive",
-}
 
 
 class ProcessingOutcome(Enum):
@@ -200,114 +196,8 @@ class SentimentAnalyzerService:
         self._health_site: Optional[web.TCPSite] = None
         self._metrics_site: Optional[web.TCPSite] = None
 
-        self._model_lock = asyncio.Lock()
-        self._device = self._resolve_device(config.model.device)
-        self._tokenizer = None
-        self._sentiment_model = None
-        self._custom_label_map: Optional[dict[int, str]] = None
-        logger.info("sentiment model configured device=%s", self._device.type)
-
-    @staticmethod
-    def _resolve_device(requested_device: str) -> torch.device:
-        normalized = (requested_device or "auto").strip().lower()
-        if normalized == "auto":
-            return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        if normalized.startswith("cuda") and not torch.cuda.is_available():
-            logger.warning(
-                "cuda requested for sentiment model but unavailable, falling back to cpu"
-            )
-            return torch.device("cpu")
-        return torch.device(normalized)
-
-    def _load_model(self, config: AppConfig) -> str:
-        local_path = config.model.local_path
-        model_kwargs = {}
-        if (
-            self._device.type == "cuda"
-            and config.model.use_float16
-            and torch.cuda.is_available()
-        ):
-            model_kwargs["torch_dtype"] = torch.float16
-        if config.model.cache_dir:
-            model_kwargs["cache_dir"] = config.model.cache_dir
-
-        if local_path and Path(local_path).exists():
-            logger.info(
-                "loading fine-tuned model from local_path=%s device=%s",
-                local_path,
-                self._device.type,
-            )
-            self._tokenizer = AutoTokenizer.from_pretrained(
-                local_path,
-                cache_dir=config.model.cache_dir,
-            )
-            self._sentiment_model = (
-                AutoModelForSequenceClassification.from_pretrained(
-                    local_path,
-                    **model_kwargs,
-                )
-                .to(self._device)
-            )
-            self._sentiment_model.eval()
-            self._custom_label_map = self._load_label_map(local_path, config)
-            return f"local:{local_path}"
-
-        logger.info(
-            "loading pretrained model name=%s device=%s",
-            config.model.name,
-            self._device.type,
-        )
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            config.model.name,
-            cache_dir=config.model.cache_dir,
-        )
-        self._sentiment_model = (
-            AutoModelForSequenceClassification.from_pretrained(
-                config.model.name,
-                **model_kwargs,
-            )
-            .to(self._device)
-        )
-        self._sentiment_model.eval()
-        self._custom_label_map = None
-        return f"hub:{config.model.name}"
-
-    async def _ensure_model_loaded(self) -> None:
-        if self._sentiment_model is not None and self._tokenizer is not None:
-            return
-        async with self._model_lock:
-            if self._sentiment_model is not None and self._tokenizer is not None:
-                return
-            model_source = self._load_model(self._config)
-            logger.info(
-                "sentiment model loaded source=%s num_labels=%s",
-                model_source,
-                self._sentiment_model.config.num_labels,
-            )
-
-    @staticmethod
-    def _load_label_map(
-        model_dir: str, config: AppConfig
-    ) -> Optional[dict[int, str]]:
-        label2id_path = config.model.label2id_path
-        if not label2id_path:
-            label2id_path = str(Path(model_dir) / "label2id.json")
-        id2label_path = str(
-            Path(label2id_path).parent / "id2label.json"
-        )
-        p = Path(id2label_path)
-        if p.exists():
-            import json as _json
-
-            raw = _json.loads(p.read_text(encoding="utf-8"))
-            return {int(k): v for k, v in raw.items()}
-        p2 = Path(label2id_path)
-        if p2.exists():
-            import json as _json
-
-            raw = _json.loads(p2.read_text(encoding="utf-8"))
-            return {v: k for k, v in raw.items()}
-        return None
+        self._router = ModelRouter(config.models)
+        self._router.log_backends()
 
     async def start(self) -> None:
         await self._start_db()
@@ -642,36 +532,43 @@ class SentimentAnalyzerService:
                     MESSAGES_PROCESSED.labels(status="skipped_unsupported").inc()
                     return ProcessingOutcome.SUCCESS
 
-                result = await self._analyze_sentiment(context.original_text)
+                result = await self._analyze_sentiment(
+                    context.original_text, context.original_language
+                )
                 processing_time_ms = (
                     time.monotonic() - processing_started
                 ) * 1000.0
 
+                emo = result["emotions"]
                 await conn.fetchval(
                     INSERT_SENTIMENT_RESULT_SQL,
-                    preprocessed_id,
-                    context.message_id,
-                    context.channel,
-                    context.event_id,
-                    result["label"],
-                    result["score"],
-                    result["positive_prob"],
-                    result["negative_prob"],
-                    result["neutral_prob"],
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    self._config.model.name,
-                    self._config.model.version,
-                    "transformers",
-                    now_dt,
-                    context.trace_id_uuid,
-                    processing_time_ms,
-                    now_dt,
+                    preprocessed_id,                         # $1
+                    context.message_id,                      # $2
+                    context.channel,                         # $3
+                    context.event_id,                        # $4
+                    result["label"],                         # $5
+                    result["score"],                         # $6
+                    result["positive_prob"],                  # $7
+                    result["negative_prob"],                  # $8
+                    result["neutral_prob"],                   # $9
+                    emo.get("anger") if emo else None,       # $10 emotion_anger
+                    emo.get("fear") if emo else None,        # $11 emotion_fear
+                    emo.get("joy") if emo else None,         # $12 emotion_joy
+                    emo.get("sadness") if emo else None,     # $13 emotion_sadness
+                    emo.get("surprise") if emo else None,    # $14 emotion_surprise
+                    emo.get("disgust") if emo else None,     # $15 emotion_disgust
+                    None,                                    # $16 aspects (not_supported_v1)
+                    result["model_name"],                    # $17
+                    result["model_version"],                 # $18
+                    "transformers",                          # $19
+                    now_dt,                                  # $20
+                    context.trace_id_uuid,                   # $21
+                    processing_time_ms,                      # $22
+                    now_dt,                                  # $23
+                    result["model_language"],                # $24
+                    result["emotion_model_name"],            # $25
+                    result["emotion_model_version"],         # $26
+                    "not_supported_v1",                      # $27 aspects_status
                 )
 
         enriched_event = self._build_enriched_event(
@@ -713,102 +610,44 @@ class SentimentAnalyzerService:
 
     # ── sentiment inference ─────────────────────────────────────────
 
-    async def _analyze_sentiment(self, text: str) -> dict:
-        await self._ensure_model_loaded()
-        if not text or not text.strip():
-            return {
-                "label": "neutral",
-                "score": 1.0,
-                "positive_prob": 0.0,
-                "negative_prob": 0.0,
-                "neutral_prob": 1.0,
-            }
+    async def _analyze_sentiment(self, text: str, language: str) -> dict:
+        """Run sentiment + optional emotion inference, returning a result dict."""
+        loop = asyncio.get_event_loop()
 
-        logits = self._aggregate_logits(text)
-        probs = self._softmax(logits)
-        pred_id = int(np.argmax(probs))
+        sentiment_backend = self._router.pick_sentiment(language)
+        scores = await loop.run_in_executor(
+            None, sentiment_backend.score_batch, [text]
+        )
+        s = scores[0]
 
-        if self._custom_label_map is not None:
-            raw_label = self._custom_label_map.get(pred_id, str(pred_id))
-        else:
-            raw_label = self._sentiment_model.config.id2label.get(
-                pred_id, str(pred_id)
+        emotion_backend = self._router.pick_emotion(language)
+        emotions: Optional[dict] = None
+        emotion_model_name: Optional[str] = None
+        emotion_model_version: Optional[str] = None
+
+        if emotion_backend is not None:
+            emo_scores = await loop.run_in_executor(
+                None, emotion_backend.score_batch, [text]
             )
-        label = self._normalize_label(raw_label)
-        score = float(probs[pred_id])
-
-        if score < self._config.model.neutral_threshold:
-            label = "neutral"
-
-        label_index = self._resolve_prob_indices()
-        negative_prob = float(probs[label_index["negative"]]) if "negative" in label_index else 0.0
-        neutral_prob = float(probs[label_index["neutral"]]) if "neutral" in label_index else 0.0
-        positive_prob = float(probs[label_index["positive"]]) if "positive" in label_index else 0.0
+            emo = emo_scores[0]
+            if emo.probabilities:
+                emotions = dict(emo.probabilities)
+            emotion_model_name = emotion_backend.name
+            emotion_model_version = emotion_backend.version
 
         return {
-            "label": label,
-            "score": score,
-            "positive_prob": positive_prob,
-            "negative_prob": negative_prob,
-            "neutral_prob": neutral_prob,
+            "label": s.label,
+            "score": s.score,
+            "positive_prob": s.positive_prob,
+            "negative_prob": s.negative_prob,
+            "neutral_prob": s.neutral_prob,
+            "emotions": emotions,
+            "model_name": sentiment_backend.name,
+            "model_version": sentiment_backend.version,
+            "model_language": self._router.sentiment_model_language(language),
+            "emotion_model_name": emotion_model_name,
+            "emotion_model_version": emotion_model_version,
         }
-
-    def _resolve_prob_indices(self) -> dict[str, int]:
-        if self._custom_label_map is not None:
-            idx: dict[str, int] = {}
-            for int_id, raw_label in self._custom_label_map.items():
-                normalized = self._normalize_label(raw_label)
-                if normalized in ("negative", "neutral", "positive"):
-                    idx[normalized] = int_id
-            return idx
-        return {"negative": 0, "neutral": 1, "positive": 2}
-
-    def _aggregate_logits(self, text: str) -> np.ndarray:
-        if self._tokenizer is None or self._sentiment_model is None:
-            raise RuntimeError("sentiment model is not loaded")
-        token_ids = self._tokenizer.encode(text, add_special_tokens=False)
-        if not token_ids:
-            return np.zeros(self._sentiment_model.config.num_labels, dtype=float)
-
-        max_length = self._config.model.max_length
-        chunk_overlap = self._config.model.chunk_overlap
-        specials = self._tokenizer.num_special_tokens_to_add(pair=False)
-        chunk_size = max(1, max_length - specials)
-        overlap = min(chunk_overlap, max(0, chunk_size - 1))
-        step = max(1, chunk_size - overlap)
-
-        logits_list: list[np.ndarray] = []
-        for start in range(0, len(token_ids), step):
-            chunk = token_ids[start : start + chunk_size]
-            input_ids = self._tokenizer.build_inputs_with_special_tokens(chunk)
-            attention_mask = [1] * len(input_ids)
-            inputs = {
-                "input_ids": torch.tensor([input_ids], device=self._device),
-                "attention_mask": torch.tensor(
-                    [attention_mask], device=self._device
-                ),
-            }
-            with torch.inference_mode():
-                outputs = self._sentiment_model(**inputs)
-            logits_list.append(outputs.logits.detach().cpu().numpy()[0])
-            if start + chunk_size >= len(token_ids):
-                break
-
-        return np.mean(logits_list, axis=0)
-
-    @staticmethod
-    def _softmax(logits: np.ndarray) -> np.ndarray:
-        exp = np.exp(logits - np.max(logits))
-        return exp / exp.sum()
-
-    @staticmethod
-    def _normalize_label(raw_label: str) -> str:
-        if raw_label in LABEL_MAP:
-            return LABEL_MAP[raw_label]
-        lower = raw_label.lower()
-        if lower in LABEL_MAP:
-            return LABEL_MAP[lower]
-        return lower
 
     # ── output building ─────────────────────────────────────────────
 
@@ -836,11 +675,14 @@ class SentimentAnalyzerService:
                     "negative_prob": result["negative_prob"],
                     "neutral_prob": result["neutral_prob"],
                 },
-                "emotions": None,
+                "emotions": result["emotions"],
+                "aspects_status": "not_supported_v1",
                 "model": {
-                    "name": self._config.model.name,
-                    "version": self._config.model.version,
+                    "name": result["model_name"],
+                    "version": result["model_version"],
                     "framework": "transformers",
+                    "language": result["model_language"],
+                    "emotion_model": result["emotion_model_name"],
                 },
                 "analyzed_at": now_iso,
                 "processing_time_ms": round(processing_time_ms, 3),

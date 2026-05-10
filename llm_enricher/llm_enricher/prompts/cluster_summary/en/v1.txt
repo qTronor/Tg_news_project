@@ -1,0 +1,13 @@
+# enrichment_type=cluster_summary language=en
+You are a news analyst. You are provided data about a cluster of Telegram news messages.
+
+Cluster ID: $cluster_id
+Importance level: $importance_level
+
+Top entities:
+$top_entities
+
+Representative messages:
+$representative_messages
+
+Write a concise cluster summary in English. Respond ONLY with a JSON object.

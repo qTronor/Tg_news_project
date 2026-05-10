@@ -1,5 +1,32 @@
 # Data Pipeline Contracts v1.0
 
+> Model training addendum (2026-05-09): user-labelled datasets can now flow
+> through validation, explicit `consent_to_train`, candidate model evaluation,
+> explicit `consent_to_deploy`, model registry deployment and rollback. Training
+> and deployment are intentionally separate consent gates.
+
+## Model Training Topics
+
+| Topic Name | Producer | Consumers | Message Key | Schema |
+|-----------|----------|-----------|-------------|--------|
+| `training.jobs.requested` | Analytics API | training-orchestrator | `training_job_id` | `training_job_requested.schema.json` |
+| `training.jobs.started` | training-orchestrator | monitoring | `training_job_id` | lifecycle |
+| `training.jobs.completed` | training-orchestrator | monitoring | `training_job_id` | `training_job_completed.schema.json` |
+| `training.jobs.failed` | training-orchestrator | monitoring | `training_job_id` | `training_job_failed.schema.json` |
+| `model.version.created` | model_registry | monitoring | `model_version_id` | `model_version_created.schema.json` |
+| `model.deployment.requested` | Analytics API | model-deployer | `model_version_id` | `model_deployment_requested.schema.json` |
+| `model.deployment.completed` | model-deployer | inference services, monitoring | `model_version_id` | lifecycle |
+| `dlq.training` | training services | manual-review | `training_job_id` | error envelope |
+
+The MVP worker can poll PostgreSQL `training_jobs` directly; the topics keep the architecture Kafka-compatible.
+
+## Model Training API Contracts
+
+- `POST /analytics/training/jobs` requires `consent_to_train: true`; otherwise no job is created.
+- `POST /analytics/models/{id}/deploy` requires `consent_to_deploy: true`; otherwise the model remains candidate/accepted/rejected and is not used in production.
+- New trained versions are registered as `candidate` and do not replace production automatically.
+- If candidate baseline comparison is worse on the primary metric, deployment is blocked by the registry.
+
 > Multilingual Variant C addendum (2026-04-20): `preprocessed.messages.payload`
 > now includes `original_language`, `language_confidence`,
 > `is_supported_for_full_analysis`, `analysis_mode`, and `translation_status`.

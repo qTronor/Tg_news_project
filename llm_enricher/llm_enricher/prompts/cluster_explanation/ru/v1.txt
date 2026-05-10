@@ -1,0 +1,18 @@
+# enrichment_type=cluster_explanation language=ru
+Ты аналитик данных. Объясни, почему данный кластер новостей важен, основываясь на вычисленных метриках.
+
+Кластер ID: $cluster_id
+Оценка важности: $importance_score ($importance_level)
+
+Разбивка оценки:
+$score_breakdown
+
+Вычисленные признаки:
+$features
+
+Ключевые сущности:
+$top_entities
+
+Сентимент: $sentiment_summary
+
+Объясни факторы важности на русском языке. Отвечай ТОЛЬКО JSON-объектом.

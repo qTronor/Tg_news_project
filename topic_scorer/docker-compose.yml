@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  topic-scorer:
+    build:
+      context: ..
+      dockerfile: topic_scorer/Dockerfile
+    container_name: topic-scorer
+    command: scheduled
+    environment:
+      TOPIC_SCORER__POSTGRES__HOST: "postgres"
+      TOPIC_SCORER__POSTGRES__PORT: "5432"
+      TOPIC_SCORER__POSTGRES__DATABASE: "${DB_NAME:-telegram_news}"
+      TOPIC_SCORER__POSTGRES__USER: "${DB_USER:-postgres}"
+      TOPIC_SCORER__POSTGRES__PASSWORD: "${DB_PASSWORD}"
+      TOPIC_SCORER__SCHEDULER__INTERVAL_SECONDS: "300"
+    ports:
+      - "8038:8005"
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+  # One-off batch job variant (run manually or via CI)
+  topic-scorer-batch:
+    build:
+      context: ..
+      dockerfile: topic_scorer/Dockerfile
+    container_name: topic-scorer-batch
+    command: batch
+    environment:
+      TOPIC_SCORER__POSTGRES__HOST: "postgres"
+      TOPIC_SCORER__POSTGRES__PORT: "5432"
+      TOPIC_SCORER__POSTGRES__DATABASE: "${DB_NAME:-telegram_news}"
+      TOPIC_SCORER__POSTGRES__USER: "${DB_USER:-postgres}"
+      TOPIC_SCORER__POSTGRES__PASSWORD: "${DB_PASSWORD}"
+    profiles:
+      - batch
+    networks:
+      - telegram-news-network
+
+networks:
+  telegram-news-network:
+    external: true
+    name: telegram-news-network

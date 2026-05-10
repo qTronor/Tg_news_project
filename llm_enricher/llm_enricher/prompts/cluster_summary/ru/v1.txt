@@ -1,0 +1,13 @@
+# enrichment_type=cluster_summary language=ru
+Ты аналитик новостей. Тебе предоставлены данные о кластере новостных сообщений из Telegram.
+
+Кластер ID: $cluster_id
+Уровень важности: $importance_level
+
+Ключевые сущности (топ):
+$top_entities
+
+Репрезентативные сообщения:
+$representative_messages
+
+Составь краткое резюме кластера на русском языке. Отвечай ТОЛЬКО JSON-объектом.

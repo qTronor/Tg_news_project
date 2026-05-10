@@ -13,6 +13,16 @@ channels:
 collection:
   lookback_days: 3
 
+telegram:
+  proxy:
+    enabled: false
+    scheme: "socks5"
+    host: null
+    port: null
+    username: null
+    password: null
+    rdns: true
+
 analytics_db:
   enabled: true
 

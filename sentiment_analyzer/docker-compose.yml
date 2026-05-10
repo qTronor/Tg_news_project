@@ -15,7 +15,6 @@ services:
       SENTIMENT_ANALYZER__POSTGRES__PASSWORD: "${DB_PASSWORD}"
       SENTIMENT_ANALYZER__MODEL__DEVICE: "${MODEL_DEVICE:-auto}"
     volumes:
-      - ../models:/app/models:ro
       - sentiment-model-cache:/root/.cache/huggingface
     ports:
       - "8012:8000"
@@ -30,4 +29,5 @@ volumes:
 networks:
   telegram-news-network:
     external: true
-    name: telegram-news-network
+    name: tg_news_project_telegram-news-network
+

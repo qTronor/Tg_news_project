@@ -1,0 +1,3118 @@
+openapi: 3.0.3
+info:
+  title: TG News REST API
+  version: 1.0.0
+  description: >
+    Unified Swagger/OpenAPI contract for TG News analytics and auth REST services.
+    Auth service also exposes generated Swagger UI at /docs.
+servers:
+  - url: http://localhost:8080
+    description: Analytics API
+  - url: http://localhost:8000
+    description: Auth API
+tags:
+  - name: health
+  - name: analytics
+  - name: topics
+  - name: review
+  - name: experiments
+  - name: entities
+  - name: annotation
+  - name: datasets
+  - name: training
+  - name: models
+  - name: auth
+  - name: admin
+  - name: reactions
+  - name: sources
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Service health check
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /metrics:
+    get:
+      tags: [health]
+      summary: Prometheus metrics
+      responses:
+        "200":
+          description: Prometheus text metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /analytics/overview:
+    get:
+      tags: [analytics]
+      summary: Dashboard KPI overview
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Overview metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OverviewStats"
+
+  /analytics/overview/clusters:
+    get:
+      tags: [topics]
+      summary: Topic cluster list
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Channel"
+        - $ref: "#/components/parameters/SortBy"
+        - $ref: "#/components/parameters/MinImportance"
+        - $ref: "#/components/parameters/ImportanceLevel"
+      responses:
+        "200":
+          description: Topic clusters
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Topic"
+
+  /analytics/topics:
+    get:
+      tags: [topics]
+      summary: Topic list alias for /analytics/overview/clusters
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Channel"
+        - $ref: "#/components/parameters/SortBy"
+        - $ref: "#/components/parameters/MinImportance"
+        - $ref: "#/components/parameters/ImportanceLevel"
+      responses:
+        "200":
+          description: Topic clusters
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Topic"
+
+  /analytics/topics/novel:
+    get:
+      tags: [topics]
+      summary: Novel topics
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - name: min_score
+          in: query
+          schema:
+            type: number
+            format: float
+            default: 0.55
+      responses:
+        "200":
+          description: Novel topic list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Topic"
+
+  /analytics/topics/{clusterId}:
+    get:
+      tags: [topics]
+      summary: Topic detail
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Topic detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /analytics/clusters/{clusterId}:
+    get:
+      tags: [topics]
+      summary: Cluster detail alias for /analytics/topics/{clusterId}
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Cluster detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /analytics/clusters/{clusterId}/documents:
+    get:
+      tags: [topics]
+      summary: Messages in a cluster
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Cluster messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Message"
+
+  /analytics/clusters/{clusterId}/first-source:
+    get:
+      tags: [topics]
+      summary: First source and propagation chain for cluster
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+      responses:
+        "200":
+          description: First source payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FirstSourcePayload"
+
+  /analytics/topics/{clusterId}/similar:
+    get:
+      tags: [topics]
+      summary: Similar topics
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Similar topics
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RelatedTopic"
+
+  /analytics/topics/{clusterId}/novelty:
+    get:
+      tags: [topics]
+      summary: Topic novelty score
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+      responses:
+        "200":
+          description: Novelty result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicNovelty"
+
+  /analytics/topics/{clusterId}/similar-history:
+    get:
+      tags: [topics]
+      summary: Similar topics from history
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Historical similarity list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TopicSimilarityHistoryItem"
+
+  /analytics/clusters/{clusterId}/compare/{otherClusterId}:
+    get:
+      tags: [topics]
+      summary: Compare two topic clusters
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+        - name: otherClusterId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Topic comparison
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicComparisonResult"
+
+  /analytics/clusters/{clusterId}/graph-metrics:
+    get:
+      tags: [topics]
+      summary: Graph metrics for topic cluster
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Topic graph metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicGraphMetrics"
+
+  /analytics/clusters/{clusterId}/timeline:
+    get:
+      tags: [topics]
+      summary: Topic timeline
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Bucket"
+      responses:
+        "200":
+          description: Timeline points and events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicTimeline"
+
+  /analytics/clusters/{clusterId}/evolution-events:
+    get:
+      tags: [topics]
+      summary: Topic evolution events
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Bucket"
+      responses:
+        "200":
+          description: Evolution events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TopicTimelineEvent"
+
+  /analytics/clusters/{clusterId}/llm/{enrichmentType}:
+    get:
+      tags: [topics]
+      summary: LLM enrichment for topic
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+        - $ref: "#/components/parameters/EnrichmentType"
+      responses:
+        "200":
+          description: LLM enrichment result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmEnrichmentResponse"
+
+  /analytics/clusters/{clusterId}/llm/{enrichmentType}/refresh:
+    post:
+      tags: [topics]
+      summary: Refresh LLM enrichment
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+        - $ref: "#/components/parameters/EnrichmentType"
+      responses:
+        "200":
+          description: Refreshed LLM enrichment result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmEnrichmentResponse"
+
+  /analytics/topics/{clusterId}/summary:
+    get:
+      tags: [topics]
+      summary: Topic summary bundle
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+        - name: language
+          in: query
+          schema:
+            type: string
+            default: ru
+      responses:
+        "200":
+          description: Topic summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicSummaryBundle"
+
+  /analytics/topics/{clusterId}/summary/regenerate:
+    post:
+      tags: [topics]
+      summary: Regenerate topic summary bundle
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                language:
+                  type: string
+                  default: ru
+      responses:
+        "200":
+          description: Regenerated topic summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicSummaryBundle"
+
+  /analytics/entities/top:
+    get:
+      tags: [entities]
+      summary: Top entities
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - name: entity_type
+          in: query
+          schema:
+            type: string
+            enum: [PER, ORG, LOC, MISC]
+        - name: cluster_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Top entities
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Entity"
+
+  /analytics/entities/{entityId}:
+    get:
+      tags: [entities]
+      summary: Canonical entity by ID
+      parameters:
+        - $ref: "#/components/parameters/EntityId"
+      responses:
+        "200":
+          description: Entity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Entity"
+        "302":
+          description: Entity was merged into another entity
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /analytics/entities/{entityId}/aliases:
+    get:
+      tags: [entities]
+      summary: Entity aliases
+      parameters:
+        - $ref: "#/components/parameters/EntityId"
+      responses:
+        "200":
+          description: Alias list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EntityAlias"
+
+  /analytics/entities/{entityId}/timeline:
+    get:
+      tags: [entities]
+      summary: Entity mention timeline
+      parameters:
+        - $ref: "#/components/parameters/EntityId"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Bucket"
+      responses:
+        "200":
+          description: Entity mention timeline
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EntityTimelinePoint"
+
+  /analytics/entities/{entityId}/merge:
+    post:
+      tags: [entities]
+      summary: Merge canonical entity into target entity
+      parameters:
+        - $ref: "#/components/parameters/EntityId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EntityMergeRequest"
+      responses:
+        "200":
+          description: Merge result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EntityMergeResult"
+
+  /analytics/entities/normalization-rules:
+    post:
+      tags: [entities]
+      summary: Create entity normalization rule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NormalizationRuleInput"
+      responses:
+        "201":
+          description: Created normalization rule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NormalizationRule"
+
+  /analytics/sentiment/dynamics:
+    get:
+      tags: [analytics]
+      summary: Sentiment dynamics
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Bucket"
+        - $ref: "#/components/parameters/Channel"
+        - name: cluster_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Sentiment time series
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SentimentPoint"
+
+  /analytics/messages:
+    get:
+      tags: [analytics]
+      summary: Messages feed
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Channel"
+        - name: topic
+          in: query
+          schema:
+            type: string
+        - name: sentiment
+          in: query
+          schema:
+            type: string
+            enum: [positive, neutral, negative]
+        - name: entity
+          in: query
+          schema:
+            type: string
+        - name: search
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Message list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Message"
+
+  /analytics/graph:
+    get:
+      tags: [analytics]
+      summary: Graph data
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - name: focus
+          in: query
+          schema:
+            type: string
+        - name: depth
+          in: query
+          schema:
+            type: integer
+            default: 2
+        - name: mode
+          in: query
+          schema:
+            type: string
+            enum: [overview, propagation]
+            default: overview
+        - name: cluster_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Graph nodes and edges
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphData"
+
+  /analytics/review/topics:
+    get:
+      tags: [review]
+      summary: Topic review tasks
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            default: pending
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Review tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TopicReviewTask"
+    post:
+      tags: [review]
+      summary: Request manual topic review
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/TopicReviewActionRequest"
+                - type: object
+                  required: [cluster_id]
+                  properties:
+                    cluster_id:
+                      type: string
+      responses:
+        "200":
+          description: Created review task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkTaskResponse"
+
+  /analytics/review/topics/{id}/confirm:
+    post:
+      tags: [review]
+      summary: Confirm topic label
+      parameters:
+        - $ref: "#/components/parameters/ReviewTaskId"
+      requestBody:
+        $ref: "#/components/requestBodies/TopicReviewAction"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /analytics/review/topics/{id}/rename:
+    post:
+      tags: [review]
+      summary: Rename topic
+      parameters:
+        - $ref: "#/components/parameters/ReviewTaskId"
+      requestBody:
+        $ref: "#/components/requestBodies/TopicReviewAction"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /analytics/review/topics/{id}/merge:
+    post:
+      tags: [review]
+      summary: Merge topic
+      parameters:
+        - $ref: "#/components/parameters/ReviewTaskId"
+      requestBody:
+        $ref: "#/components/requestBodies/TopicReviewAction"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /analytics/review/topics/{id}/split:
+    post:
+      tags: [review]
+      summary: Split topic
+      parameters:
+        - $ref: "#/components/parameters/ReviewTaskId"
+      requestBody:
+        $ref: "#/components/requestBodies/TopicReviewAction"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /analytics/review/topics/{id}/reject:
+    post:
+      tags: [review]
+      summary: Reject topic label
+      parameters:
+        - $ref: "#/components/parameters/ReviewTaskId"
+      requestBody:
+        $ref: "#/components/requestBodies/TopicReviewAction"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /analytics/experiments/topics:
+    get:
+      tags: [experiments]
+      summary: Topic modeling experiments
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Experiments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TopicExperiment"
+
+  /analytics/experiments/topics/run:
+    post:
+      tags: [experiments]
+      summary: Run topic modeling experiment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TopicExperimentRunRequest"
+      responses:
+        "201":
+          description: Experiment run created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicExperimentRunResponse"
+
+  /analytics/experiments/topics/{experimentId}:
+    get:
+      tags: [experiments]
+      summary: Topic experiment detail
+      parameters:
+        - name: experimentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Experiment detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicExperiment"
+
+  /analytics/experiments/topics/{experimentId}/metrics:
+    get:
+      tags: [experiments]
+      summary: Topic experiment metrics
+      parameters:
+        - name: experimentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Experiment metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicExperimentMetrics"
+
+  /analytics/datasets:
+    get:
+      tags: [datasets]
+      summary: Dataset versions
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Dataset versions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DatasetVersion"
+
+  /analytics/datasets/build:
+    post:
+      tags: [datasets]
+      summary: Build annotation dataset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DatasetBuildRequest"
+      responses:
+        "201":
+          description: Dataset build created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdStatusResponse"
+
+  /analytics/datasets/{datasetId}/export:
+    get:
+      tags: [datasets]
+      summary: Export dataset
+      parameters:
+        - name: datasetId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [csv, jsonl, octis, huggingface]
+            default: jsonl
+      responses:
+        "200":
+          description: Dataset file
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+            application/x-ndjson:
+              schema:
+                type: string
+                format: binary
+            application/json:
+              schema:
+                type: string
+                format: binary
+
+  /analytics/annotation/tasks:
+    get:
+      tags: [annotation]
+      summary: Annotation tasks
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: dataset_id
+          in: query
+          schema:
+            type: string
+        - name: annotator_id
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Annotation tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AnnotationTask"
+
+  /analytics/annotation/tasks/{taskId}:
+    get:
+      tags: [annotation]
+      summary: Annotation task detail
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Annotation task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnnotationTask"
+
+  /analytics/annotation/tasks/{taskId}/label:
+    post:
+      tags: [annotation]
+      summary: Submit annotation label
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LabelSubmitRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/OkTask"
+
+  /analytics/annotation/tasks/{taskId}/skip:
+    post:
+      tags: [annotation]
+      summary: Skip annotation task
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/OkTask"
+
+  /analytics/annotation/stats:
+    get:
+      tags: [annotation]
+      summary: Annotation statistics
+      parameters:
+        - name: dataset_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Annotation stats
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AnnotationStats"
+
+  /analytics/annotation/guidelines:
+    get:
+      tags: [annotation]
+      summary: Active annotation guidelines
+      responses:
+        "200":
+          description: Annotation guidelines
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnnotationGuidelines"
+
+  /api/auth/register:
+    post:
+      tags: [auth]
+      summary: Register user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserRegister"
+      responses:
+        "201":
+          description: Token pair
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserLogin"
+      responses:
+        "200":
+          description: Token pair
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/auth/refresh:
+    post:
+      tags: [auth]
+      summary: Refresh tokens
+      requestBody:
+        $ref: "#/components/requestBodies/RefreshToken"
+      responses:
+        "200":
+          description: Token pair
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      summary: Logout
+      requestBody:
+        $ref: "#/components/requestBodies/RefreshToken"
+      responses:
+        "204":
+          description: Logged out
+
+  /api/auth/me:
+    get:
+      tags: [auth]
+      summary: Current user profile
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+    put:
+      tags: [auth]
+      summary: Update current user profile
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserUpdate"
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+
+  /api/auth/change-password:
+    post:
+      tags: [auth]
+      summary: Change password
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordChange"
+      responses:
+        "204":
+          description: Password changed
+
+  /api/auth/forgot-password:
+    post:
+      tags: [auth]
+      summary: Request password reset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForgotPasswordRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Detail"
+
+  /api/auth/reset-password:
+    post:
+      tags: [auth]
+      summary: Reset password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetPasswordRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Detail"
+
+  /api/auth/verify-email:
+    post:
+      tags: [auth]
+      summary: Verify email
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyEmailRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Detail"
+
+  /api/auth/resend-verification:
+    post:
+      tags: [auth]
+      summary: Resend verification email
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Detail"
+
+  /api/admin/messages/{event_id}:
+    patch:
+      tags: [admin]
+      summary: Edit message metadata
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MessageEdit"
+      responses:
+        "200":
+          description: Edit result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+
+  /api/admin/channels:
+    get:
+      tags: [admin]
+      summary: Channel visibility list
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Channels
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChannelInfo"
+
+  /api/admin/channels/{channel_name}:
+    put:
+      tags: [admin]
+      summary: Upsert channel visibility
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: channel_name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChannelVisibilityUpdate"
+      responses:
+        "200":
+          description: Channel visibility updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+
+  /api/admin/audit-log:
+    get:
+      tags: [admin]
+      summary: Admin audit log
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: action
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Audit log entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AuditLogEntry"
+
+  /api/messages/{event_id}/reaction:
+    post:
+      tags: [reactions]
+      summary: Add, change, or remove user reaction
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReactionRequest"
+      responses:
+        "201":
+          description: Reaction update result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReactionUpdateResponse"
+
+  /api/messages/{event_id}/reactions:
+    get:
+      tags: [reactions]
+      summary: Message reaction counters
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Reaction info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReactionInfo"
+
+  /api/messages/batch-reactions:
+    post:
+      tags: [reactions]
+      summary: Batch message reaction counters
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              maxItems: 100
+              items:
+                type: string
+      responses:
+        "200":
+          description: Reaction info list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ReactionInfo"
+
+  /api/sources/telegram/channels:
+    post:
+      tags: [sources]
+      summary: Add Telegram channel source
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TelegramChannelCreateRequest"
+      responses:
+        "202":
+          description: Channel accepted for validation/backfill
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelegramChannelStatus"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    get:
+      tags: [sources]
+      summary: User Telegram channels
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: User Telegram channels
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TelegramChannelStatus"
+
+  /api/sources/telegram/channels/{channel_name}:
+    get:
+      tags: [sources]
+      summary: User Telegram channel status
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: channel_name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Telegram channel status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelegramChannelStatus"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/sources/telegram/channels/{channel_name}/progress:
+    get:
+      tags: [sources]
+      summary: Telegram channel validation/backfill progress
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: channel_name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Telegram channel progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelegramChannelStatus"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /analytics/datasets/{datasetId}/validation:
+    get:
+      tags: [datasets]
+      summary: Get latest dataset validation report
+      parameters:
+        - name: datasetId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: task_type
+          in: query
+          schema:
+            type: string
+            enum: [topic_classification, sentiment_classification, embedding_finetuning, ner_finetuning]
+      responses:
+        "200": { description: Validation report }
+    post:
+      tags: [datasets]
+      summary: Validate dataset for a training task
+      parameters:
+        - name: datasetId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [task_type]
+              properties:
+                task_type:
+                  type: string
+                  enum: [topic_classification, sentiment_classification, embedding_finetuning, ner_finetuning]
+      responses:
+        "200": { description: Validation report }
+
+  /analytics/training/jobs/preview:
+    post:
+      tags: [training]
+      summary: Preview training plan without creating a job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dataset_id, task_type]
+              properties:
+                dataset_id: { type: string, format: uuid }
+                task_type:
+                  type: string
+                  enum: [topic_classification, sentiment_classification, embedding_finetuning, ner_finetuning]
+                base_model: { type: string }
+                training_config: { type: object }
+      responses:
+        "200": { description: Training plan preview }
+
+  /analytics/training/jobs:
+    get:
+      tags: [training]
+      summary: List training jobs
+      responses:
+        "200": { description: Training jobs }
+    post:
+      tags: [training]
+      summary: Create training job after explicit consent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dataset_id, task_type, base_model, consent_to_train]
+              properties:
+                dataset_id: { type: string, format: uuid }
+                task_type:
+                  type: string
+                  enum: [topic_classification, sentiment_classification, embedding_finetuning, ner_finetuning]
+                base_model: { type: string }
+                training_config: { type: object }
+                consent_to_train: { type: boolean, enum: [true] }
+      responses:
+        "201": { description: Training job created }
+        "400": { description: Missing consent or invalid dataset }
+
+  /analytics/training/jobs/{jobId}:
+    get:
+      tags: [training]
+      summary: Get training job detail
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Training job detail }
+
+  /analytics/training/jobs/{jobId}/logs:
+    get:
+      tags: [training]
+      summary: Get training job logs
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Training job logs }
+
+  /analytics/training/jobs/{jobId}/cancel:
+    post:
+      tags: [training]
+      summary: Cancel queued or running training job
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Cancelled job }
+
+  /analytics/models:
+    get:
+      tags: [models]
+      summary: List model registry entries
+      responses:
+        "200": { description: Model versions }
+
+  /analytics/models/current:
+    get:
+      tags: [models]
+      summary: Get current production model by type
+      parameters:
+        - name: model_type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [topic_classifier, sentiment_classifier, embedding_model, ner_model]
+      responses:
+        "200": { description: Current deployed model }
+
+  /analytics/models/{modelId}:
+    get:
+      tags: [models]
+      summary: Get model card
+      parameters:
+        - name: modelId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Model card }
+
+  /analytics/models/{modelId}/accept:
+    post:
+      tags: [models]
+      summary: Mark candidate model accepted
+      parameters:
+        - name: modelId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Accepted model }
+
+  /analytics/models/{modelId}/reject:
+    post:
+      tags: [models]
+      summary: Mark candidate model rejected
+      parameters:
+        - name: modelId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Rejected model }
+
+  /analytics/models/{modelId}/deploy:
+    post:
+      tags: [models]
+      summary: Deploy model after explicit deploy consent
+      parameters:
+        - name: modelId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [consent_to_deploy]
+              properties:
+                consent_to_deploy: { type: boolean, enum: [true] }
+                actor_role: { type: string, enum: [admin, ml_engineer, owner] }
+      responses:
+        "200": { description: Deployed model }
+        "400": { description: Missing consent or blocked deployment }
+
+  /analytics/models/{modelId}/rollback:
+    post:
+      tags: [models]
+      summary: Roll back deployed model to previous version
+      parameters:
+        - name: modelId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Rolled back model }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    From:
+      name: from
+      in: query
+      required: true
+      schema:
+        type: string
+        format: date-time
+    To:
+      name: to
+      in: query
+      required: true
+      schema:
+        type: string
+        format: date-time
+    Channel:
+      name: channel
+      in: query
+      schema:
+        type: string
+    ClusterId:
+      name: clusterId
+      in: path
+      required: true
+      schema:
+        type: string
+    EntityId:
+      name: entityId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ReviewTaskId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    EnrichmentType:
+      name: enrichmentType
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [cluster_summary, cluster_explanation, key_actors_summary, novelty_explanation, timeline_summary, what_changed_recently]
+    Bucket:
+      name: bucket
+      in: query
+      schema:
+        type: string
+        enum: [hour, day]
+        default: hour
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    SortBy:
+      name: sort_by
+      in: query
+      schema:
+        type: string
+        enum: [messages, importance, recency]
+        default: messages
+    MinImportance:
+      name: min_importance
+      in: query
+      schema:
+        type: number
+        minimum: 0
+        maximum: 1
+    ImportanceLevel:
+      name: importance_level
+      in: query
+      description: Comma-separated levels, e.g. high,critical
+      schema:
+        type: string
+
+  requestBodies:
+    RefreshToken:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RefreshRequest"
+    TopicReviewAction:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/TopicReviewActionRequest"
+
+  responses:
+    Ok:
+      description: OK
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OkResponse"
+    OkTask:
+      description: OK with task ID
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OkTaskResponse"
+    Detail:
+      description: Detail message
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/DetailResponse"
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Conflict
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
+
+  schemas:
+    AnyObject:
+      type: object
+      additionalProperties: true
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+    ErrorResponse:
+      type: object
+      properties:
+        detail:
+          oneOf:
+            - type: string
+            - $ref: "#/components/schemas/AnyObject"
+    ApiErrorResponse:
+      type: object
+      required: [error, detail]
+      properties:
+        error:
+          type: string
+        detail:
+          type: string
+        meta:
+          $ref: "#/components/schemas/AnyObject"
+    DetailResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+    OkResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+    OkTaskResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        task_id:
+          type: string
+    IdStatusResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+    StatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+      additionalProperties: true
+
+    OverviewStats:
+      type: object
+      required: [total_messages, messages_change_pct, new_topics, topics_change, active_channels, avg_sentiment]
+      properties:
+        total_messages:
+          type: integer
+        messages_change_pct:
+          type: number
+        new_topics:
+          type: integer
+        topics_change:
+          type: integer
+        active_channels:
+          type: integer
+        avg_sentiment:
+          type: number
+
+    Message:
+      type: object
+      required: [event_id, channel, message_id, text, date, views, forwards]
+      properties:
+        event_id:
+          type: string
+        channel:
+          type: string
+        message_id:
+          type: integer
+        permalink:
+          type: string
+          nullable: true
+        text:
+          type: string
+        date:
+          type: string
+          format: date-time
+        views:
+          type: integer
+        forwards:
+          type: integer
+        topic_label:
+          type: string
+          nullable: true
+        cluster_id:
+          type: string
+          nullable: true
+        sentiment_score:
+          type: number
+        sentiment_label:
+          type: string
+        sentiment_confidence:
+          type: number
+        entities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Entity"
+        source_status:
+          type: string
+          enum: [exact, probable, unknown]
+        source_type:
+          type: string
+        source_confidence:
+          type: number
+        source_event_id:
+          type: string
+          nullable: true
+        source_channel:
+          type: string
+          nullable: true
+
+    Entity:
+      type: object
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        type:
+          type: string
+          enum: [PER, ORG, LOC, MISC]
+        normalized:
+          type: string
+        confidence:
+          type: number
+          nullable: true
+        mention_count:
+          type: integer
+        topic_count:
+          type: integer
+        channel_count:
+          type: integer
+        trend_pct:
+          type: number
+        canonical_name:
+          type: string
+        aliases:
+          type: array
+          items:
+            $ref: "#/components/schemas/EntityAlias"
+        source_model:
+          type: string
+        first_seen_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        wikidata_id:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        language:
+          type: string
+          nullable: true
+
+    EntityAlias:
+      type: object
+      properties:
+        alias:
+          type: string
+        source:
+          type: string
+        confidence:
+          type: number
+        is_primary:
+          type: boolean
+        language:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    EntityTimelinePoint:
+      type: object
+      properties:
+        time:
+          type: string
+          format: date-time
+        mention_count:
+          type: integer
+
+    EntityMergeRequest:
+      type: object
+      required: [target_id]
+      properties:
+        target_id:
+          type: string
+          format: uuid
+        reason:
+          type: string
+        actor:
+          type: string
+          default: api
+
+    EntityMergeResult:
+      type: object
+      properties:
+        source_id:
+          type: string
+        target_id:
+          type: string
+        transferred_aliases:
+          type: integer
+        repointed_ner_results:
+          type: integer
+
+    NormalizationRuleInput:
+      type: object
+      required: [rule_type, pattern]
+      properties:
+        rule_type:
+          type: string
+          enum: [alias, abbreviation, regex, merge]
+        pattern:
+          type: string
+        replacement:
+          type: string
+          nullable: true
+        entity_type:
+          type: string
+          nullable: true
+        language:
+          type: string
+          nullable: true
+        target_canonical_id:
+          type: string
+          format: uuid
+          nullable: true
+        priority:
+          type: integer
+          default: 100
+        created_by:
+          type: string
+          default: api
+    NormalizationRule:
+      allOf:
+        - $ref: "#/components/schemas/NormalizationRuleInput"
+        - type: object
+          properties:
+            id:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+
+    ChannelStat:
+      type: object
+      properties:
+        channel:
+          type: string
+        count:
+          type: integer
+
+    Topic:
+      type: object
+      required: [cluster_id, label, message_count, channel_count, avg_sentiment, top_entities, top_keywords, is_new, first_seen, last_seen]
+      properties:
+        cluster_id:
+          type: string
+        label:
+          type: string
+        message_count:
+          type: integer
+        channel_count:
+          type: integer
+        avg_sentiment:
+          type: number
+        top_entities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Entity"
+        top_keywords:
+          type: array
+          items:
+            type: string
+        is_new:
+          type: boolean
+        first_seen:
+          type: string
+          format: date-time
+        last_seen:
+          type: string
+          format: date-time
+        sparkline:
+          type: array
+          items:
+            type: integer
+        channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChannelStat"
+        source_status:
+          type: string
+          enum: [exact, probable, unknown]
+        importance_score:
+          type: number
+          nullable: true
+        importance_level:
+          type: string
+          nullable: true
+          enum: [low, medium, high, critical]
+        score_calculated_at:
+          type: string
+          format: date-time
+          nullable: true
+        novelty_score:
+          type: number
+          nullable: true
+        novelty_status:
+          type: string
+          nullable: true
+          enum: [new, continuation, merged, split, uncertain, noise]
+        confidence_score:
+          type: number
+          nullable: true
+        stability_score:
+          type: number
+          nullable: true
+
+    TopicDetail:
+      allOf:
+        - $ref: "#/components/schemas/Topic"
+        - type: object
+          properties:
+            representative_messages:
+              type: array
+              items:
+                $ref: "#/components/schemas/Message"
+            related_topics:
+              type: array
+              items:
+                $ref: "#/components/schemas/RelatedTopic"
+            sentiment_breakdown:
+              type: object
+              properties:
+                positive:
+                  type: integer
+                neutral:
+                  type: integer
+                negative:
+                  type: integer
+            volume_timeline:
+              type: array
+              items:
+                type: object
+                properties:
+                  time:
+                    type: string
+                    format: date-time
+                  count:
+                    type: integer
+            first_source:
+              $ref: "#/components/schemas/FirstSourcePayload"
+            summary:
+              type: string
+              nullable: true
+            score_breakdown:
+              $ref: "#/components/schemas/AnyObject"
+            novelty:
+              $ref: "#/components/schemas/TopicNovelty"
+
+    RelatedTopic:
+      type: object
+      properties:
+        cluster_id:
+          type: string
+        label:
+          type: string
+        similarity:
+          type: number
+
+    TopicNovelty:
+      type: object
+      properties:
+        cluster_id:
+          type: string
+        run_id:
+          type: string
+          nullable: true
+        novelty_score:
+          type: number
+        novelty_status:
+          type: string
+          enum: [new, continuation, merged, split, uncertain, noise]
+        nearest_topic_id:
+          type: string
+          nullable: true
+        features:
+          type: object
+          additionalProperties:
+            type: number
+        explanation:
+          $ref: "#/components/schemas/AnyObject"
+        calculated_at:
+          type: string
+          format: date-time
+          nullable: true
+        algorithm_version:
+          type: string
+          nullable: true
+
+    TopicSimilarityHistoryItem:
+      type: object
+      properties:
+        cluster_id:
+          type: string
+        semantic_similarity:
+          type: number
+        entity_overlap:
+          type: number
+        channel_overlap:
+          type: number
+        keyword_overlap:
+          type: number
+        overall_similarity:
+          type: number
+        first_seen:
+          type: string
+          format: date-time
+          nullable: true
+        last_seen:
+          type: string
+          format: date-time
+          nullable: true
+        message_count:
+          type: integer
+        keywords:
+          type: array
+          items:
+            type: string
+        evidence:
+          $ref: "#/components/schemas/AnyObject"
+
+    TopicComparisonResult:
+      type: object
+      required: [cluster_a_id, cluster_b_id, similarity_score, classification, is_same_topic]
+      properties:
+        cluster_a_id:
+          type: string
+        cluster_b_id:
+          type: string
+        algorithm_version:
+          type: string
+        similarity_score:
+          type: number
+        classification:
+          type: string
+          enum: [same_topic, related_topics, different_topics, possible_subtopic_split]
+        is_same_topic:
+          type: boolean
+        breakdown:
+          $ref: "#/components/schemas/AnyObject"
+        evidence:
+          $ref: "#/components/schemas/AnyObject"
+        topic_a:
+          $ref: "#/components/schemas/AnyObject"
+        topic_b:
+          $ref: "#/components/schemas/AnyObject"
+        explanation:
+          $ref: "#/components/schemas/AnyObject"
+        window:
+          $ref: "#/components/schemas/TimeRange"
+        cached:
+          type: boolean
+
+    TopicGraphMetrics:
+      type: object
+      properties:
+        cluster_id:
+          type: string
+        window:
+          $ref: "#/components/schemas/TimeRange"
+        algorithm_version:
+          type: string
+        summary:
+          $ref: "#/components/schemas/AnyObject"
+        top_entities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Entity"
+        top_channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChannelStat"
+        bridge_nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnyObject"
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnyObject"
+
+    TopicTimeline:
+      type: object
+      properties:
+        cluster_id:
+          type: string
+        bucket_size:
+          type: string
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/TopicTimelinePoint"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/TopicTimelineEvent"
+        generated_at:
+          type: string
+          format: date-time
+          nullable: true
+        storage_status:
+          type: string
+    TopicTimelinePoint:
+      type: object
+      properties:
+        bucket_start:
+          type: string
+          format: date-time
+        bucket_end:
+          type: string
+          format: date-time
+        message_count:
+          type: integer
+        unique_channel_count:
+          type: integer
+        top_entities:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnyObject"
+        sentiment:
+          type: object
+          additionalProperties:
+            type: number
+        new_channels:
+          type: array
+          items:
+            type: string
+        event_ids:
+          type: array
+          items:
+            type: string
+    TopicTimelineEvent:
+      type: object
+      properties:
+        event_type:
+          type: string
+        event_time:
+          type: string
+          format: date-time
+        bucket_start:
+          type: string
+          format: date-time
+          nullable: true
+        severity:
+          type: number
+          nullable: true
+        summary:
+          type: string
+        details:
+          $ref: "#/components/schemas/AnyObject"
+
+    FirstSourcePayload:
+      type: object
+      properties:
+        cluster_id:
+          type: string
+        source_status:
+          type: string
+          enum: [exact, probable, unknown]
+        exact_source:
+          $ref: "#/components/schemas/SourceResolution"
+        inferred_source:
+          $ref: "#/components/schemas/SourceResolution"
+        display_source:
+          $ref: "#/components/schemas/SourceResolution"
+        propagation_chain:
+          type: array
+          items:
+            $ref: "#/components/schemas/PropagationLink"
+    SourceResolution:
+      type: object
+      nullable: true
+      properties:
+        resolution_kind:
+          type: string
+        source_type:
+          type: string
+        source_confidence:
+          type: number
+        source_event_id:
+          type: string
+          nullable: true
+        source_channel:
+          type: string
+          nullable: true
+        source_message_id:
+          type: integer
+          nullable: true
+        source_message_date:
+          type: string
+          format: date-time
+          nullable: true
+        source_snippet:
+          type: string
+          nullable: true
+        explanation:
+          $ref: "#/components/schemas/AnyObject"
+        evidence:
+          $ref: "#/components/schemas/AnyObject"
+    PropagationLink:
+      allOf:
+        - $ref: "#/components/schemas/SourceResolution"
+        - type: object
+          properties:
+            child_event_id:
+              type: string
+            child_channel:
+              type: string
+            child_message_id:
+              type: integer
+            parent_event_id:
+              type: string
+
+    SentimentPoint:
+      type: object
+      properties:
+        time:
+          type: string
+          format: date-time
+        positive:
+          type: number
+        neutral:
+          type: number
+        negative:
+          type: number
+
+    GraphData:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphEdge"
+    GraphNode:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        type:
+          type: string
+        weight:
+          type: number
+      additionalProperties: true
+    GraphEdge:
+      type: object
+      properties:
+        source:
+          type: string
+        target:
+          type: string
+        weight:
+          type: number
+        type:
+          type: string
+        confidence:
+          type: number
+
+    LlmEnrichmentResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error, budget_exhausted, pending]
+        result:
+          $ref: "#/components/schemas/AnyObject"
+        cached:
+          type: boolean
+        model:
+          $ref: "#/components/schemas/AnyObject"
+        prompt_version:
+          type: string
+        language:
+          type: string
+        analysis_mode:
+          type: string
+        tokens:
+          $ref: "#/components/schemas/AnyObject"
+        cost_usd:
+          type: number
+        latency_ms:
+          type: integer
+        generated_at:
+          type: string
+          format: date-time
+          nullable: true
+        is_llm_generated:
+          type: boolean
+        message:
+          type: string
+          nullable: true
+
+    TopicSummaryBundle:
+      type: object
+      properties:
+        public_cluster_id:
+          type: string
+        language:
+          type: string
+        model:
+          $ref: "#/components/schemas/AnyObject"
+        generated_at:
+          type: string
+          format: date-time
+        summaries:
+          $ref: "#/components/schemas/AnyObject"
+
+    TopicReviewTask:
+      type: object
+      properties:
+        id:
+          type: string
+        cluster_id:
+          type: string
+        run_id:
+          type: string
+          nullable: true
+        reason:
+          type: string
+        status:
+          type: string
+        priority:
+          type: integer
+        signals:
+          $ref: "#/components/schemas/AnyObject"
+        requested_by:
+          type: string
+          nullable: true
+        assigned_to:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        active_label:
+          type: string
+          nullable: true
+        topic:
+          $ref: "#/components/schemas/TopicDetail"
+    TopicReviewActionRequest:
+      type: object
+      properties:
+        actor_user_id:
+          type: string
+        actor_username:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+        confidence:
+          type: number
+        target_cluster_id:
+          type: string
+        child_labels:
+          type: array
+          items:
+            type: string
+        event_ids:
+          type: array
+          items:
+            type: string
+        reason:
+          type: string
+        comment:
+          type: string
+
+    TopicExperiment:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        dataset_version:
+          type: string
+        dataset_version_id:
+          type: string
+          nullable: true
+        window_start:
+          type: string
+          format: date-time
+        window_end:
+          type: string
+          format: date-time
+        channels:
+          type: array
+          items:
+            type: string
+        seed:
+          type: integer
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        run_count:
+          type: integer
+        completed_run_count:
+          type: integer
+    TopicExperimentRunRequest:
+      type: object
+      required: [models]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        dataset_version_id:
+          type: string
+        channels:
+          type: array
+          items:
+            type: string
+        models:
+          type: array
+          items:
+            type: string
+        embedding_model:
+          type: string
+        seed:
+          type: integer
+        dataset_version:
+          type: string
+        max_messages:
+          type: integer
+        n_topics:
+          type: integer
+    TopicExperimentRunResponse:
+      type: object
+      properties:
+        experiment_id:
+          type: string
+        status:
+          type: string
+        run_ids:
+          type: array
+          items:
+            type: string
+        runner_command:
+          type: string
+    TopicExperimentMetrics:
+      type: object
+      properties:
+        experiment_id:
+          type: string
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnyObject"
+
+    DatasetVersion:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        language:
+          type: string
+        window_start:
+          type: string
+          format: date-time
+        window_end:
+          type: string
+          format: date-time
+        channels:
+          type: array
+          items:
+            type: string
+        min_word_count:
+          type: integer
+        dedup_strategy:
+          type: string
+        total_items:
+          type: integer
+        annotated_count:
+          type: integer
+        annotation_progress:
+          type: number
+        status:
+          type: string
+          enum: [building, ready, archived]
+        config:
+          $ref: "#/components/schemas/AnyObject"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+    DatasetBuildRequest:
+      type: object
+      required: [name, window_start, window_end]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        window_start:
+          type: string
+          format: date-time
+        window_end:
+          type: string
+          format: date-time
+        channels:
+          type: array
+          items:
+            type: string
+        min_word_count:
+          type: integer
+          default: 5
+        dedup_strategy:
+          type: string
+          default: event_id
+        languages:
+          type: array
+          items:
+            type: string
+        created_by:
+          type: string
+
+    AnnotationTask:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [pending, in_progress, completed, skipped]
+        priority:
+          type: integer
+        item:
+          $ref: "#/components/schemas/AnyObject"
+        label:
+          $ref: "#/components/schemas/AnyObject"
+    LabelSubmitRequest:
+      type: object
+      required: [user_id, username, quality]
+      properties:
+        user_id:
+          type: string
+        username:
+          type: string
+        broad_topic:
+          type: string
+          nullable: true
+        storyline:
+          type: string
+          nullable: true
+        is_new_storyline:
+          type: boolean
+          nullable: true
+        quality:
+          type: string
+          enum: [useful, noise, duplicate]
+        entities:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnyObject"
+        comment:
+          type: string
+          nullable: true
+        annotator_confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+    AnnotationStats:
+      type: object
+      properties:
+        dataset_version_id:
+          type: string
+        dataset_version_name:
+          type: string
+        total_items:
+          type: integer
+        annotated_items:
+          type: integer
+        pending_items:
+          type: integer
+        skipped_items:
+          type: integer
+        annotation_progress:
+          type: number
+        quality_distribution:
+          $ref: "#/components/schemas/AnyObject"
+        distinct_topics:
+          type: integer
+    AnnotationGuidelines:
+      type: object
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        title:
+          type: string
+        content:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    TimeRange:
+      type: object
+      properties:
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+
+    UserRegister:
+      type: object
+      required: [email, username, password]
+      properties:
+        email:
+          type: string
+          format: email
+        username:
+          type: string
+          minLength: 3
+          maxLength: 100
+          pattern: "^[a-zA-Z0-9_-]+$"
+        password:
+          type: string
+          minLength: 8
+          maxLength: 128
+          format: password
+    UserLogin:
+      type: object
+      required: [login, password]
+      properties:
+        login:
+          type: string
+          description: Email or username
+        password:
+          type: string
+          format: password
+    TokenPair:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        token_type:
+          type: string
+          default: bearer
+        expires_in:
+          type: integer
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        username:
+          type: string
+        role:
+          type: string
+          enum: [admin, user]
+        is_active:
+          type: boolean
+        email_verified:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    UserUpdate:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 100
+          pattern: "^[a-zA-Z0-9_-]+$"
+        email:
+          type: string
+          format: email
+    PasswordChange:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password:
+          type: string
+          format: password
+        new_password:
+          type: string
+          minLength: 8
+          maxLength: 128
+          format: password
+    ForgotPasswordRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+    ResetPasswordRequest:
+      type: object
+      required: [token, new_password]
+      properties:
+        token:
+          type: string
+        new_password:
+          type: string
+          minLength: 8
+          maxLength: 128
+          format: password
+    VerifyEmailRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+
+    MessageEdit:
+      type: object
+      properties:
+        sentiment_score:
+          type: number
+          minimum: -1
+          maximum: 1
+          nullable: true
+        sentiment_label:
+          type: string
+          maxLength: 20
+          nullable: true
+        topic_label:
+          type: string
+          maxLength: 200
+          nullable: true
+        cluster_id:
+          type: integer
+          nullable: true
+        entities:
+          type: array
+          nullable: true
+          items:
+            $ref: "#/components/schemas/AnyObject"
+    ChannelVisibilityUpdate:
+      type: object
+      required: [is_visible]
+      properties:
+        is_visible:
+          type: boolean
+    ChannelInfo:
+      type: object
+      properties:
+        channel_name:
+          type: string
+        is_visible:
+          type: boolean
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+    AuditLogEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        admin_id:
+          type: string
+          format: uuid
+          nullable: true
+        admin_username:
+          type: string
+          nullable: true
+        action:
+          type: string
+        target_type:
+          type: string
+          nullable: true
+        target_id:
+          type: string
+          nullable: true
+        old_value:
+          $ref: "#/components/schemas/AnyObject"
+        new_value:
+          $ref: "#/components/schemas/AnyObject"
+        ip_address:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    ReactionRequest:
+      type: object
+      required: [reaction]
+      properties:
+        reaction:
+          type: string
+          enum: [like, dislike]
+    ReactionInfo:
+      type: object
+      properties:
+        message_event_id:
+          type: string
+        likes:
+          type: integer
+        dislikes:
+          type: integer
+        user_reaction:
+          type: string
+          nullable: true
+          enum: [like, dislike]
+    ReactionUpdateResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [added, changed, removed]
+        reaction:
+          type: string
+          nullable: true
+          enum: [like, dislike]
+
+    TelegramChannelCreateRequest:
+      type: object
+      required: [channel, start_date]
+      properties:
+        channel:
+          type: string
+          minLength: 1
+          maxLength: 512
+        start_date:
+          type: string
+          format: date
+    TelegramChannelStatus:
+      type: object
+      properties:
+        channel_name:
+          type: string
+        input_value:
+          type: string
+          nullable: true
+        telegram_url:
+          type: string
+          nullable: true
+        telegram_channel_id:
+          type: integer
+          nullable: true
+        requested_start_date:
+          type: string
+          format: date
+          nullable: true
+        historical_limit_date:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [validating, validation_failed, live_enabled, backfilling, ready]
+        validation_status:
+          type: string
+          enum: [pending, validated, failed]
+        validation_error:
+          type: string
+          nullable: true
+        live_enabled:
+          type: boolean
+        backfill_total_days:
+          type: integer
+        backfill_completed_days:
+          type: integer
+        backfill_failed_days:
+          type: integer
+        backfill_pending_days:
+          type: integer
+        backfill_running_days:
+          type: integer
+        backfill_retrying_days:
+          type: integer
+        backfill_messages_published:
+          type: integer
+        backfill_last_completed_date:
+          type: string
+          format: date
+          nullable: true
+        last_live_collected_at:
+          type: string
+          format: date-time
+          nullable: true
+        added_at:
+          type: string
+          format: date-time
+        added_by_user_id:
+          type: string
+          format: uuid
+          nullable: true
+        first_message_at:
+          type: string
+          format: date-time
+          nullable: true
+        first_message_event_id:
+          type: string
+          nullable: true
+        first_message_available:
+          type: boolean
+        raw_message_count:
+          type: integer
+        feed_path:
+          type: string
+          nullable: true

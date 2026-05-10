@@ -67,12 +67,23 @@ class LoggingConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     sbert_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    embedding_model: Optional[str] = None
+    embedding_models: Dict[str, str] = {
+        "baseline": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        "multilingual_mpnet": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+        "labse": "sentence-transformers/LaBSE",
+        "rubert": "ai-forever/sbert_large_nlu_ru",
+    }
     cache_dir: Optional[str] = None
     device: str = "auto"
     use_float16: bool = True
     batch_size: int = 32
     normalize_embeddings: bool = True
     version: str = "1.0.0"
+    # ONNX optional backend (set backend="onnx" + onnx_path to activate)
+    backend: str = "torch"
+    onnx_path: Optional[str] = None
+    onnx_provider: str = "CPUExecutionProvider"
 
 
 class ClusteringConfig(BaseModel):
@@ -83,8 +94,15 @@ class ClusteringConfig(BaseModel):
     n_neighbors: int = 15
     min_dist: float = 0.1
     umap_n_components: int = 50
+    n_components: Optional[int] = None
     fallback_similarity_threshold: float = 0.68
     scheduler_interval_seconds: int = 30
+    top_n_words: int = 10
+    ngram_range: tuple[int, int] = (1, 2)
+    nr_topics: Optional[int] = None
+    min_topic_size: Optional[int] = None
+    seed: int = 42
+    dataset_version: Optional[str] = None
 
 
 class StorageConfig(BaseModel):

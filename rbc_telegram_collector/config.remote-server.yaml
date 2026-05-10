@@ -1,0 +1,54 @@
+# Remote collector profile:
+# - static channels from this file
+# - Kafka on the remote server
+# - persistence into local PostgreSQL happens via message-persister and SSH reverse tunnel
+
+channels:
+  - name: "rbc_news"
+    url: "https://t.me/rbc_news"
+    enabled: true
+    limit: 2500
+
+  - name: "banksta"
+    url: "https://t.me/banksta"
+    enabled: true
+    limit: 2500
+
+collection:
+  lookback_days: 3
+
+telegram:
+  proxy:
+    enabled: false
+    scheme: "socks5"
+    host: null
+    port: null
+    username: null
+    password: null
+    rdns: true
+
+analytics_db:
+  enabled: false
+
+kafka:
+  enabled: true
+  topic: "raw.telegram.messages"
+
+backfill:
+  enabled: false
+  global_concurrency: 1
+  max_jobs_per_cycle: 1
+  max_attempts: 3
+  retry_backoff_seconds: 60
+
+output:
+  data_dir: "data"
+  state_dir: "state"
+  formats: ["jsonl"]
+
+scheduler:
+  enabled: true
+  interval_seconds: 60
+
+logging:
+  level: "INFO"

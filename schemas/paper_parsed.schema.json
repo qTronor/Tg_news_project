@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PaperParsed",
+  "description": "Parsed scientific paper event emitted by paper_parser",
+  "type": "object",
+  "required": ["paper_id", "source_message_id", "source_type", "parsed_at", "parsing_status"],
+  "additionalProperties": false,
+  "properties": {
+    "paper_id": {"type": "string", "description": "UUID of scientific_papers row"},
+    "source_message_id": {"type": "string"},
+    "source_channel": {"type": "string"},
+    "title": {"type": ["string", "null"]},
+    "authors": {"type": "array", "items": {"type": "string"}},
+    "abstract": {"type": ["string", "null"]},
+    "text_for_summary": {"type": ["string", "null"], "description": "abstract + first 8000 chars of full_text"},
+    "full_text_available": {"type": "boolean"},
+    "text_length": {"type": ["integer", "null"]},
+    "source_type": {"type": "string"},
+    "source_url": {"type": ["string", "null"]},
+    "parsing_status": {"type": "string", "enum": ["parsed", "partial", "failed"]},
+    "parsed_at": {"type": "string", "format": "date-time"}
+  }
+}

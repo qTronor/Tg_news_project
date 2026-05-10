@@ -27,18 +27,53 @@ schemas:
   preprocessed_message_path: "/app/schemas/preprocessed_message.schema.json"
   sentiment_enriched_path: "/app/schemas/sentiment_enriched.schema.json"
 
-model:
-  name: "cointegrated/rubert-tiny-sentiment-balanced"
-  # local_path: "/app/models/sentiment_clf"  # uncomment to use fine-tuned model
-  # label2id_path: "/app/models/sentiment_clf/label2id.json"
-  # cache_dir: "/models/hf-cache"
-  device: "auto"
-  use_float16: true
-  batch_size: 32
-  max_length: 384
-  chunk_overlap: 64
-  neutral_threshold: 0.55
-  version: "1.0.0"
+models:
+  # Russian sentiment: compact rubert-tiny (fast, good quality for RU)
+  ru:
+    name: "cointegrated/rubert-tiny-sentiment-balanced"
+    # local_path: "/app/models/ru_sentiment"
+    cache_dir: "/models/hf-cache"
+    device: "auto"
+    use_float16: true
+    batch_size: 32
+    max_length: 384
+    chunk_overlap: 64
+    neutral_threshold: 0.55
+    version: "1.0.0"
+
+  # EN + other supported languages: multilingual XLM-RoBERTa
+  multilingual:
+    name: "cardiffnlp/twitter-xlm-roberta-base-sentiment"
+    cache_dir: "/models/hf-cache"
+    device: "auto"
+    use_float16: true
+    batch_size: 16
+    max_length: 512
+    chunk_overlap: 64
+    neutral_threshold: 0.50
+    version: "1.0.0"
+
+  # RU emotion model: CEDR-tiny (joy/sadness/surprise/fear/anger)
+  emotion_ru:
+    name: "cointegrated/rubert-tiny2-cedr-emotion-detection"
+    cache_dir: "/models/hf-cache"
+    device: "auto"
+    use_float16: true
+    batch_size: 32
+    max_length: 128
+    version: "1.0.0"
+    enabled: true
+
+  # EN emotion model: distilroberta (+ disgust label)
+  emotion_en:
+    name: "j-hartmann/emotion-english-distilroberta-base"
+    cache_dir: "/models/hf-cache"
+    device: "auto"
+    use_float16: true
+    batch_size: 16
+    max_length: 128
+    version: "1.0.0"
+    enabled: true
 
 retry:
   max_attempts: 5

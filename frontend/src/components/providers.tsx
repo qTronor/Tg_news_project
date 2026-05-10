@@ -49,16 +49,21 @@ export function useDemoContext() {
 
 const LOCALE_KEY = "tg_locale";
 
+function getInitialLocale(): Locale {
+  if (typeof window === "undefined") return "ru";
+  const stored = localStorage.getItem(LOCALE_KEY);
+  return stored === "en" || stored === "ru" ? stored : "ru";
+}
+
 export function Providers({ children }: { children: React.ReactNode }) {
-  const timeRange = useTimeRange("24h");
+  const timeRange = useTimeRange("7d");
   const [isDemo, setIsDemoRaw] = useState(true);
   const [lastError, setLastError] = useState<string | null>(null);
-  const [locale, setLocaleRaw] = useState<Locale>("ru");
+  const [locale, setLocaleRaw] = useState<Locale>(getInitialLocale);
 
   useEffect(() => {
-    const stored = localStorage.getItem(LOCALE_KEY) as Locale | null;
-    if (stored === "en" || stored === "ru") setLocaleRaw(stored);
-  }, []);
+    document.documentElement.lang = locale;
+  }, [locale]);
 
   const setLocale = useCallback((l: Locale) => {
     setLocaleRaw(l);

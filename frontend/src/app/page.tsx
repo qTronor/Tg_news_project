@@ -11,6 +11,7 @@ import { ChannelBarChart } from "@/components/charts/channel-bar";
 import { useOverview, useTopics, useEntities, useSentiment } from "@/lib/use-data";
 import { formatNumber, entityTypeColor } from "@/lib/utils";
 import { useTranslation } from "@/lib/i18n";
+import { useGlobalTimeRange } from "@/components/providers";
 import { MessageSquare, Layers, Radio, TrendingUp, Loader2 } from "lucide-react";
 import { motion } from "framer-motion";
 import Link from "next/link";
@@ -25,10 +26,12 @@ function LoadingSpinner() {
 
 export default function DashboardPage() {
   const { t } = useTranslation();
+  const { preset, range } = useGlobalTimeRange();
   const { data: overview, isLoading: loadingOverview } = useOverview();
   const { data: topics, isLoading: loadingTopics } = useTopics();
   const { data: entities, isLoading: loadingEntities } = useEntities();
-  const { data: sentiment, isLoading: loadingSentiment } = useSentiment();
+  const sentimentBucket = preset === "7d" || preset === "30d" ? "day" : "hour";
+  const { data: sentiment, isLoading: loadingSentiment } = useSentiment(sentimentBucket);
 
   const topEntities = (entities || []).slice(0, 8);
 
@@ -46,7 +49,12 @@ export default function DashboardPage() {
       <Header title="Dashboard" />
       <PageTransition>
         <div className="p-6 space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <section className="space-y-3">
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">Attention</h2>
+              <p className="text-xs text-muted-foreground">Volume and emerging-topic signals for the selected window.</p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {loadingOverview || !overview ? (
               Array.from({ length: 4 }).map((_, i) => (
                 <div key={i} className="bg-card rounded-xl border border-border p-5 h-28 animate-pulse" />
@@ -81,14 +89,26 @@ export default function DashboardPage() {
                 />
               </>
             )}
-          </div>
+            </div>
+            {!loadingOverview && overview && (
+              <div className="grid gap-3 text-xs text-muted-foreground md:grid-cols-3">
+                <div><span className="font-medium text-foreground">Context:</span> active channels show spread across sources.</div>
+                <div><span className="font-medium text-foreground">Mood:</span> average sentiment summarizes the current tone.</div>
+                <div><span className="font-medium text-foreground">Quality:</span> review and confidence live in Quality Lab when topics need analyst input.</div>
+              </div>
+            )}
+          </section>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <Card className="lg:col-span-2">
               <CardHeader>
                 <CardTitle>{t("dash.sentimentDynamics")}</CardTitle>
               </CardHeader>
-              {loadingSentiment || !sentiment ? <LoadingSpinner /> : <SentimentAreaChart data={sentiment} />}
+              {loadingSentiment || !sentiment ? (
+                <LoadingSpinner />
+              ) : (
+                <SentimentAreaChart data={sentiment} preset={preset} from={range.from} to={range.to} />
+              )}
             </Card>
 
             <Card>

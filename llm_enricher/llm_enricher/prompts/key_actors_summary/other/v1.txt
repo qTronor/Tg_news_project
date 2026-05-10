@@ -1,0 +1,22 @@
+# enrichment_type=key_actors_summary language=other
+You are a news analyst. You have been given data about a Telegram topic cluster (language: other/multilingual).
+
+Cluster ID: $cluster_id
+
+Key entities (most frequently mentioned):
+$top_entities
+
+Representative messages:
+$representative_messages
+
+Identify the key actors (persons, organizations, countries) in this topic in English.
+Rules:
+- Include no more than 5 actors.
+- Only include actors mentioned in the provided data. Do NOT invent.
+- "name" field: actor name/title as in the data.
+- "role" field: brief role in the context of this topic (up to 120 chars).
+- "why_matters" field: why the actor matters for this topic (up to 300 chars).
+- "mention_count" field: number of mentions from the data (integer).
+
+Reply ONLY with a JSON object, no markdown wrappers:
+{"actors": [{"name": "...", "role": "...", "why_matters": "...", "mention_count": 0}]}

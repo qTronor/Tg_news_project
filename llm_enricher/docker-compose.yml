@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  llm-enricher:
+    build:
+      context: ..
+      dockerfile: llm_enricher/Dockerfile
+    container_name: llm-enricher
+    environment:
+      LLM_ENRICHER__POSTGRES__HOST: "postgres"
+      LLM_ENRICHER__POSTGRES__PORT: "5432"
+      LLM_ENRICHER__POSTGRES__DATABASE: "${DB_NAME:-telegram_news}"
+      LLM_ENRICHER__POSTGRES__USER: "${DB_USER:-postgres}"
+      LLM_ENRICHER__POSTGRES__PASSWORD: "${DB_PASSWORD}"
+      LLM_ENRICHER__LLM__PROVIDER: "${LLM_PROVIDER:-mock}"
+      LLM_ENRICHER__LLM__MODEL_NAME: "${LLM_MODEL:-mistral-large-latest}"
+      LLM_ENRICHER__BUDGET__DAILY_USD: "${LLM_DAILY_BUDGET_USD:-5.0}"
+      MISTRAL_API_KEY: "${MISTRAL_API_KEY:-}"
+    ports:
+      - "8050:8000"
+      - "8051:8001"
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+networks:
+  telegram-news-network:
+    external: true
+    name: tg_news_project_telegram-news-network

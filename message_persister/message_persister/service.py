@@ -117,6 +117,10 @@ class NonRetriableError(Exception):
     pass
 
 
+def _has_meaningful_text(value: Optional[str]) -> bool:
+    return bool((value or "").strip())
+
+
 @dataclass
 class MessageContext:
     event_id: str
@@ -355,6 +359,8 @@ class MessagePersisterService:
             trace_id_uuid = UUID(trace_id)
         except ValueError as exc:
             raise NonRetriableError(f"invalid value: {exc}") from exc
+        if not _has_meaningful_text(payload["payload"].get("text")):
+            raise NonRetriableError("raw message text is empty")
         expected_event_id = f"{channel}:{message_id}"
         if event_id != expected_event_id:
             raise NonRetriableError(

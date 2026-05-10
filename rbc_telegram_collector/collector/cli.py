@@ -9,6 +9,7 @@ from telethon.sessions import StringSession
 
 from collector.runner import run_collect
 from collector.service import CollectorService
+from collector.sources.telegram import _build_telethon_proxy, _load_proxy_settings
 
 
 def cmd_collect(args: argparse.Namespace) -> int:
@@ -21,7 +22,12 @@ def cmd_service(args: argparse.Namespace) -> int:
 
 
 async def _make_string_session(api_id: int, api_hash: str) -> str:
-    async with TelegramClient(StringSession(), api_id, api_hash) as client:
+    async with TelegramClient(
+        StringSession(),
+        api_id,
+        api_hash,
+        proxy=_build_telethon_proxy(_load_proxy_settings(None)),
+    ) as client:
         # first run will ask for phone + code, then returns string session
         return client.session.save()
 

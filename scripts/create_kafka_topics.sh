@@ -101,6 +101,9 @@ create_topic "ner.enriched" 6 2592000000 \
 create_topic "graph.updates" 6 604800000 \
     "Graph update commands for Neo4j"
 
+create_topic "topic.assignments" 6 2592000000 \
+    "Topic cluster assignments emitted by topic_clusterer"
+
 # Dead Letter Queue Topics
 log_info ""
 log_info "Creating DLQ topics..."
@@ -119,6 +122,26 @@ create_topic "dlq.ner" 3 7776000000 \
 
 create_topic "dlq.graph" 3 7776000000 \
     "Failed graph updates"
+
+create_topic "dlq.topic_clustering" 3 7776000000 \
+    "Failed topic clustering operations"
+
+# Scientific paper analysis topics
+log_info ""
+log_info "Creating scientific paper analysis topics..."
+
+create_topic "paper.detected" 6 2592000000 \
+    "Scientific paper detection events"
+
+create_topic "paper.parsed" 6 2592000000 \
+    "Parsed scientific paper metadata and text"
+
+create_topic "paper.summarized" 6 2592000000 \
+    "LLM-generated structured summary of scientific papers"
+
+# Scientific paper DLQ
+create_topic "dlq.paper" 3 7776000000 \
+    "Failed paper processing events"
 
 # Verify all topics
 log_info ""

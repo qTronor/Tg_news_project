@@ -16,7 +16,11 @@ from collector.registry import RegistryChannel, RegistryStore
 from collector.sinks.csv_sink import CsvSink
 from collector.sinks.jsonl import JsonlSink
 from collector.sinks.kafka_raw import KafkaRawSink
-from collector.sources.telegram import TelegramChannelError, TelegramChannelSource
+from collector.sources.telegram import (
+    TelegramChannelError,
+    TelegramChannelSource,
+    TelegramProxySettings,
+)
 
 
 @dataclass(frozen=True)
@@ -95,7 +99,10 @@ async def collect_once(cfg: AppConfig) -> Dict[str, int]:
     effective_since = _resolve_window_start(cfg.collection.lookback_days)
 
     registry = RegistryStore(cfg.analytics_db)
-    async with TelegramChannelSource(session_name="collector") as src:
+    async with TelegramChannelSource(
+        session_name="collector",
+        proxy=TelegramProxySettings(**cfg.telegram.proxy.model_dump()),
+    ) as src:
         kafka_sink = KafkaRawSink(cfg.kafka) if cfg.kafka.enabled else None
         await registry.start()
         if kafka_sink is not None:

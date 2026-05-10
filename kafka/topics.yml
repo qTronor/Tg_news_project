@@ -78,11 +78,158 @@ topics:
       cleanup.policy: delete
       segment.ms: 86400000
     description: Graph update commands for Neo4j
+
+  - name: topic.assignments
+    partitions: 6
+    replication_factor: 3
+    config:
+      retention.ms: 2592000000  # 30 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 86400000
+    description: Topic cluster assignments emitted by topic_clusterer
+
+  - name: topic.novelty.candidates
+    partitions: 6
+    replication_factor: 3
+    config:
+      retention.ms: 2592000000  # 30 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 86400000
+    description: Explainable new-topic candidates emitted by topic_novelty_detector
+
+  - name: training.jobs.requested
+    partitions: 3
+    replication_factor: 3
+    config:
+      retention.ms: 2592000000  # 30 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 86400000
+    description: User-consented model training job requests
+
+  - name: training.jobs.started
+    partitions: 3
+    replication_factor: 3
+    config:
+      retention.ms: 604800000  # 7 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 86400000
+    description: Training job lifecycle event emitted when a job starts
+
+  - name: training.jobs.completed
+    partitions: 3
+    replication_factor: 3
+    config:
+      retention.ms: 2592000000  # 30 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 86400000
+    description: Training job lifecycle event emitted after evaluation
+
+  - name: training.jobs.failed
+    partitions: 3
+    replication_factor: 3
+    config:
+      retention.ms: 7776000000  # 90 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 604800000
+    description: Failed training job lifecycle events
+
+  - name: model.version.created
+    partitions: 3
+    replication_factor: 3
+    config:
+      retention.ms: 2592000000  # 30 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 86400000
+    description: Candidate model versions registered after training and evaluation
+
+  - name: model.deployment.requested
+    partitions: 3
+    replication_factor: 3
+    config:
+      retention.ms: 2592000000  # 30 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 86400000
+    description: User-consented deployment requests for accepted/candidate models
+
+  - name: model.deployment.completed
+    partitions: 3
+    replication_factor: 3
+    config:
+      retention.ms: 2592000000  # 30 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 86400000
+    description: Completed model deployment lifecycle events
     
+  # =====================================================
+  # Scientific Paper Analysis Topics
+  # =====================================================
+
+  - name: paper.detected
+    partitions: 6
+    replication_factor: 3
+    config:
+      retention.ms: 2592000000  # 30 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 86400000
+    description: Scientific paper detection events from preprocessed messages
+
+  - name: paper.parsed
+    partitions: 6
+    replication_factor: 3
+    config:
+      retention.ms: 2592000000  # 30 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 86400000
+    description: Parsed scientific paper metadata and text
+
+  - name: paper.summarized
+    partitions: 6
+    replication_factor: 3
+    config:
+      retention.ms: 2592000000  # 30 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 86400000
+    description: LLM-generated structured summary of scientific papers
+
+  - name: dlq.paper
+    partitions: 3
+    replication_factor: 3
+    config:
+      retention.ms: 7776000000  # 90 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 604800000
+    description: Failed paper processing events (all stages)
+
   # =====================================================
   # Dead Letter Queue (DLQ) Topics
   # =====================================================
-  
+
   - name: dlq.raw.messages
     partitions: 3
     replication_factor: 3
@@ -138,6 +285,28 @@ topics:
       segment.ms: 604800000
     description: Failed graph updates
 
+  - name: dlq.topic_clustering
+    partitions: 3
+    replication_factor: 3
+    config:
+      retention.ms: 7776000000  # 90 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 604800000
+    description: Failed topic clustering operations
+
+  - name: dlq.training
+    partitions: 3
+    replication_factor: 3
+    config:
+      retention.ms: 7776000000  # 90 days
+      compression.type: lz4
+      min.insync.replicas: 2
+      cleanup.policy: delete
+      segment.ms: 604800000
+    description: Failed training orchestration events
+
 # =====================================================
 # Consumer Groups
 # =====================================================
@@ -169,6 +338,31 @@ consumer_groups:
       - sentiment.enriched
       - ner.enriched
     description: Builds knowledge graph updates
+
+  - name: topic-clusterer-group
+    topics:
+      - preprocessed.messages
+    description: Builds topic cluster assignments
+
+  - name: training-orchestrator-group
+    topics:
+      - training.jobs.requested
+    description: Orchestrates user-consented model training jobs
+
+  - name: paper-detector-group
+    topics:
+      - preprocessed.messages
+    description: Detects scientific papers in preprocessed messages
+
+  - name: paper-parser-group
+    topics:
+      - paper.detected
+    description: Parses metadata and text from detected papers
+
+  - name: paper-summarizer-group
+    topics:
+      - paper.parsed
+    description: Generates LLM summaries for parsed papers
     
   - name: neo4j-writer-group
     topics:
@@ -182,6 +376,15 @@ consumer_groups:
       - preprocessed.messages
       - sentiment.enriched
       - ner.enriched
+      - topic.assignments
+      - topic.novelty.candidates
+      - training.jobs.requested
+      - training.jobs.started
+      - training.jobs.completed
+      - training.jobs.failed
+      - model.version.created
+      - model.deployment.requested
+      - model.deployment.completed
       - graph.updates
     description: Monitoring and metrics collection
     
@@ -191,7 +394,10 @@ consumer_groups:
       - dlq.preprocessing
       - dlq.sentiment
       - dlq.ner
+      - dlq.topic_clustering
+      - dlq.training
       - dlq.graph
+      - dlq.paper
     description: Manual review and retry of failed messages
 
 # =====================================================

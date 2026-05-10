@@ -1,6 +1,6 @@
 "use client";
 
-import { use, type ReactNode } from "react";
+import { use, useMemo, useState, type ReactNode } from "react";
 import { format, parseISO } from "date-fns";
 import { motion } from "framer-motion";
 import Link from "next/link";
@@ -12,16 +12,22 @@ import {
   Gauge,
   GitBranch,
   Hash,
+  ListChecks,
   Loader2,
   Network,
   Radio,
+  RefreshCw,
   Share2,
   ShieldCheck,
+  Sparkles,
   Split,
   TrendingUp,
+  Users,
 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Header } from "@/components/layout/header";
 import { PageTransition } from "@/components/layout/page-transition";
+import { useGlobalTimeRange } from "@/components/providers";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MessageCard } from "@/components/feed/message-card";
@@ -30,9 +36,20 @@ import { SourceStatusBadge } from "@/components/topics/source-status-badge";
 import { VolumeLineChart } from "@/components/charts/volume-line";
 import { ChannelBarChart } from "@/components/charts/channel-bar";
 import { SentimentDonutChart } from "@/components/charts/sentiment-donut";
-import { useTopicDetail } from "@/lib/use-data";
+import { useTopicComparison, useTopicDetail, useTopicGraphMetrics, useTopicSummary, useTopicTimeline, useTopics } from "@/lib/use-data";
+import { api } from "@/lib/api";
 import { cn, entityTypeColor, formatNumber } from "@/lib/utils";
-import type { TopicDetail } from "@/types";
+import type {
+  ClusterId,
+  Topic,
+  TopicComparisonResult,
+  TopicDetail,
+  TopicGraphAnalytics,
+  TopicGraphMetricsApiResponse,
+  TopicSummaryBundle,
+  TopicTimelineAnnotation,
+  TopicTimelineApiEvent,
+} from "@/types";
 
 type MetricState = "available" | "pending" | "empty";
 
@@ -49,6 +66,14 @@ function formatDateTime(value?: string | null) {
   return format(parseISO(value), "dd MMM HH:mm");
 }
 
+function formatAge(value?: string | null) {
+  if (!value) return "n/a";
+  const hours = Math.max(0, Math.round((Date.now() - parseISO(value).getTime()) / 36e5));
+  if (hours < 1) return "<1h";
+  if (hours < 48) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+
 function formatPercent(value?: number | null, signed = false) {
   if (value === undefined || value === null) return null;
   const normalized = Math.abs(value) <= 1 ? value * 100 : value;
@@ -60,12 +85,109 @@ function formatScore(value?: number | null) {
   return value <= 1 ? value.toFixed(2) : Math.round(value).toString();
 }
 
+function formatGraphSummary(graph: TopicGraphMetricsApiResponse) {
+  const summary = graph.summary;
+  const fragments = [
+    `${summary.node_count} nodes`,
+    `${summary.edge_count} edges`,
+    summary.community_count != null ? `${summary.community_count} communities` : null,
+    summary.density != null ? `density ${summary.density.toFixed(3)}` : null,
+  ].filter(Boolean);
+  return fragments.join(" · ");
+}
+
+function normalizeGraphAnalytics(
+  detail: TopicDetail,
+  graphMetrics?: TopicGraphMetricsApiResponse | null,
+): TopicGraphAnalytics | null {
+  if (detail.graph_analytics) return detail.graph_analytics;
+  if (!graphMetrics?.summary) return null;
+
+  return {
+    node_count: graphMetrics.summary.node_count,
+    edge_count: graphMetrics.summary.edge_count,
+    communities_count: graphMetrics.summary.community_count ?? null,
+    bridge_nodes_count: graphMetrics.bridge_nodes?.length ?? null,
+    density: graphMetrics.summary.density ?? null,
+    top_central_entity: graphMetrics.top_entities?.[0] ?? null,
+    top_central_channel: graphMetrics.top_channels?.[0] ?? null,
+    summary: formatGraphSummary(graphMetrics),
+  };
+}
+
+function normalizeTimelineAnnotations(
+  detail: TopicDetail,
+  timelineEvents?: TopicTimelineApiEvent[] | null,
+  timelinePoints?: import("@/types").TopicTimelineApiPoint[] | null,
+): TopicTimelineAnnotation[] {
+  if ((detail.timeline_annotations || []).length > 0) return detail.timeline_annotations || [];
+  if ((timelineEvents || []).length > 0) {
+    return (timelineEvents || []).map((event) => ({
+      time: event.event_time,
+      label: event.summary,
+      description: event.event_type.replaceAll("_", " "),
+    }));
+  }
+  // Derive synthetic milestones from volume points when no evolution events exist
+  const points = timelinePoints || [];
+  if (points.length === 0) return [];
+  const annotations: TopicTimelineAnnotation[] = [];
+  annotations.push({
+    time: points[0].bucket_start,
+    label: `Topic started · ${points[0].message_count} msg`,
+    description: "first activity",
+  });
+  let peakIdx = 0;
+  for (let i = 1; i < points.length; i++) {
+    if (points[i].message_count > points[peakIdx].message_count) peakIdx = i;
+  }
+  if (peakIdx > 0) {
+    annotations.push({
+      time: points[peakIdx].bucket_start,
+      label: `Peak · ${points[peakIdx].message_count} msg`,
+      description: "volume peak",
+    });
+  }
+  if (points.length > 1) {
+    const last = points[points.length - 1];
+    if (last.bucket_start !== points[peakIdx].bucket_start) {
+      annotations.push({
+        time: last.bucket_start,
+        label: `Latest · ${last.message_count} msg`,
+        description: "most recent bucket",
+      });
+    }
+  }
+  return annotations.sort((a, b) => a.time.localeCompare(b.time));
+}
+
+function deriveNoveltyScore(detail: TopicDetail) {
+  if (detail.novelty_score !== undefined && detail.novelty_score !== null) return detail.novelty_score;
+  if (detail.novelty?.novelty_score !== undefined && detail.novelty?.novelty_score !== null) return detail.novelty.novelty_score;
+  const direct = detail.kpi_metrics?.novelty_score;
+  if (direct !== undefined && direct !== null) return direct;
+  const components = detail.score_breakdown?.components as Record<string, { normalized?: number; raw?: number }> | undefined;
+  const novelty = components?.novelty;
+  if (novelty?.normalized !== undefined) return novelty.normalized;
+  if (novelty?.raw !== undefined) return novelty.raw;
+  return null;
+}
+
+function formatShortPercent(value?: number | null) {
+  if (value === undefined || value === null) return "n/a";
+  return `${Math.round(value * 100)}%`;
+}
+
 function latestDelta(points: TopicDetail["volume_timeline"]) {
   if (points.length < 2) return null;
   const previous = points[points.length - 2]?.count || 0;
   const current = points[points.length - 1]?.count || 0;
   if (previous === 0) return null;
   return (current - previous) / previous;
+}
+
+function formatSentimentBalance(breakdown: TopicDetail["sentiment_breakdown"]) {
+  return `${breakdown.positive}/${breakdown.neutral}/${breakdown.negative}`;
 }
 
 function statusLabel(detail: TopicDetail) {
@@ -135,9 +257,651 @@ function EmptyAnalyticState({ children }: { children: ReactNode }) {
   );
 }
 
+const LEVEL_COLORS: Record<string, string> = {
+  low: "text-muted-foreground bg-muted",
+  medium: "text-primary bg-primary/10",
+  high: "text-amber-600 bg-amber-500/15 dark:text-amber-400",
+  critical: "text-destructive bg-destructive/15",
+};
+
+const COMPONENT_LABELS: Record<string, string> = {
+  growth_rate: "Growth rate",
+  message_count: "Volume",
+  unique_channels: "Channel reach",
+  new_channel_ratio: "New channels",
+  unique_entities: "Entity richness",
+  novelty: "Entity novelty",
+  sentiment_intensity: "Sentiment intensity",
+  sentiment_shift: "Sentiment shift",
+  cluster_density: "Graph density",
+};
+
+const COMPARISON_LABELS: Record<string, string> = {
+  embedding: "Embedding",
+  entities: "Entities",
+  channels: "Channels",
+  time: "Time",
+  messages: "Messages",
+  sentiment: "Sentiment",
+};
+
+const COMPARISON_CLASS_STYLES: Record<string, string> = {
+  same_topic: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
+  related_topics: "bg-primary/10 text-primary",
+  possible_subtopic_split: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+  different_topics: "bg-muted text-muted-foreground",
+};
+
+interface ComponentScore {
+  raw: number;
+  normalized: number;
+  weight: number;
+  contribution: number;
+}
+
+function ImportanceBreakdownPanel({
+  breakdown,
+  level,
+  score,
+}: {
+  breakdown: Record<string, unknown>;
+  level?: string | null;
+  score?: number | null;
+}) {
+  const components = breakdown.components as Record<string, ComponentScore> | undefined;
+  if (!components) return null;
+
+  const sorted = Object.entries(components).sort(
+    ([, a], [, b]) => (b as ComponentScore).contribution - (a as ComponentScore).contribution
+  );
+
+  const maxContrib = Math.max(...sorted.map(([, c]) => (c as ComponentScore).contribution));
+
+  return (
+    <div className="border border-border bg-card p-5 space-y-4">
+      <div className="flex items-center gap-3">
+        <span className="text-2xl font-semibold text-foreground">{score != null ? score.toFixed(2) : "—"}</span>
+        {level && (
+          <span className={cn("rounded px-2 py-0.5 text-xs font-semibold uppercase tracking-wide", LEVEL_COLORS[level] ?? "bg-muted text-muted-foreground")}>
+            {level}
+          </span>
+        )}
+      </div>
+      <div className="space-y-2">
+        {sorted.map(([key, c]) => {
+          const comp = c as ComponentScore;
+          const barPct = maxContrib > 0 ? (comp.contribution / maxContrib) * 100 : 0;
+          return (
+            <div key={key} className="grid grid-cols-[160px_1fr_56px] items-center gap-3">
+              <span className="text-xs text-muted-foreground truncate">{COMPONENT_LABELS[key] ?? key}</span>
+              <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${barPct}%` }} />
+              </div>
+              <span className="text-xs font-medium text-foreground text-right">{(comp.contribution * 100).toFixed(1)}%</span>
+            </div>
+          );
+        })}
+      </div>
+      {(breakdown.penalties as unknown[])?.length > 0 && (
+        <p className="text-xs text-muted-foreground border-t border-border pt-3">
+          Small-cluster penalty applied (×{(breakdown.penalty_factor as number).toFixed(2)})
+        </p>
+      )}
+    </div>
+  );
+}
+
+function TopicComparisonPanel({
+  currentTopic,
+  topics,
+  selectedClusterId,
+  onSelectCluster,
+  comparison,
+  isLoading,
+}: {
+  currentTopic: TopicDetail;
+  topics: Topic[];
+  selectedClusterId: ClusterId | null;
+  onSelectCluster: (clusterId: ClusterId | null) => void;
+  comparison?: TopicComparisonResult | null;
+  isLoading: boolean;
+}) {
+  const candidates = topics.filter((topic) => topic.cluster_id !== currentTopic.cluster_id);
+  const sortedBreakdown = comparison
+    ? Object.entries(comparison.breakdown).sort(([, a], [, b]) => b.contribution - a.contribution)
+    : [];
+  const maxContribution = Math.max(0.001, ...sortedBreakdown.map(([, item]) => item.contribution));
+
+  return (
+    <Card className="rounded-none">
+      <CardHeader>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <CardTitle>Compare topics</CardTitle>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Deterministic comparison over entities, channels, time, representative messages and sentiment.
+            </p>
+          </div>
+          <select
+            value={selectedClusterId ?? ""}
+            onChange={(event) => onSelectCluster(event.target.value || null)}
+            className="h-9 min-w-[240px] border border-border bg-background px-3 text-sm text-foreground outline-none transition-colors hover:bg-accent focus:border-primary"
+          >
+            <option value="">Select topic</option>
+            {candidates.map((topic) => (
+              <option key={topic.cluster_id} value={topic.cluster_id}>
+                {topic.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </CardHeader>
+
+      {!selectedClusterId ? (
+        <EmptyAnalyticState>Select a second topic to calculate an explainable comparison.</EmptyAnalyticState>
+      ) : isLoading ? (
+        <div className="flex min-h-[220px] items-center justify-center">
+          <Loader2 className="h-5 w-5 animate-spin text-primary" />
+        </div>
+      ) : comparison ? (
+        <div className="space-y-5">
+          <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
+            <div className="border border-border bg-muted/20 p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Similarity</div>
+              <div className="mt-3 text-4xl font-semibold text-foreground">
+                {formatShortPercent(comparison.similarity_score)}
+              </div>
+              <div
+                className={cn(
+                  "mt-3 inline-flex rounded px-2 py-1 text-xs font-semibold uppercase tracking-wide",
+                  COMPARISON_CLASS_STYLES[comparison.classification] ?? "bg-muted text-muted-foreground"
+                )}
+              >
+                {comparison.classification.replaceAll("_", " ")}
+              </div>
+              <div className="mt-3 text-xs leading-5 text-muted-foreground">
+                {comparison.explanation.summary}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {sortedBreakdown.map(([key, item]) => (
+                <div key={key} className="grid grid-cols-[112px_1fr_60px] items-center gap-3">
+                  <div className="truncate text-xs text-muted-foreground">
+                    {COMPARISON_LABELS[key] ?? key}
+                  </div>
+                  <div className="h-2 overflow-hidden bg-muted">
+                    <div
+                      className="h-full bg-primary transition-all"
+                      style={{ width: `${Math.round((item.contribution / maxContribution) * 100)}%` }}
+                    />
+                  </div>
+                  <div className="text-right text-xs font-medium text-foreground">
+                    {formatShortPercent(item.score)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-3">
+            <div className="border border-border p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Shared entities</div>
+              <div className="mt-3 space-y-2">
+                {comparison.evidence.entities.shared.length > 0 ? (
+                  comparison.evidence.entities.shared.slice(0, 5).map((entity) => (
+                    <div key={entity.id} className="flex items-center justify-between gap-3 text-sm">
+                      <span className="truncate text-foreground">{entity.text}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {entity.a_mentions}/{entity.b_mentions}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-muted-foreground">No shared entities in top evidence.</div>
+                )}
+              </div>
+            </div>
+
+            <div className="border border-border p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Shared channels</div>
+              <div className="mt-3 space-y-2">
+                {comparison.evidence.channels.shared.length > 0 ? (
+                  comparison.evidence.channels.shared.slice(0, 5).map((channel) => (
+                    <div key={channel.channel} className="flex items-center justify-between gap-3 text-sm">
+                      <span className="truncate text-foreground">{channel.channel}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {channel.a_count}/{channel.b_count}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-muted-foreground">No shared channels in top evidence.</div>
+                )}
+              </div>
+            </div>
+
+            <div className="border border-border p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Divergence</div>
+              <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <div className="text-muted-foreground">Time overlap</div>
+                  <div className="mt-1 font-medium text-foreground">
+                    {formatShortPercent(comparison.evidence.time.overlap_coefficient)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">Sentiment delta</div>
+                  <div className="mt-1 font-medium text-foreground">
+                    {comparison.evidence.sentiment.delta.toFixed(2)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">Messages</div>
+                  <div className="mt-1 font-medium text-foreground">
+                    {formatShortPercent(comparison.evidence.messages.score)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">Embedding</div>
+                  <div className="mt-1 font-medium text-foreground">
+                    {comparison.evidence.embedding.available
+                      ? formatShortPercent(comparison.evidence.embedding.score)
+                      : "n/a"}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <ComparisonFactorList title="Why close" items={comparison.explanation.positive_factors} />
+            <ComparisonFactorList title="Why different" items={comparison.explanation.negative_factors} />
+            <ComparisonFactorList title="Split signals" items={comparison.explanation.subtopic_split_signals} />
+          </div>
+        </div>
+      ) : (
+        <EmptyAnalyticState>Comparison data is not available for the selected topic pair.</EmptyAnalyticState>
+      )}
+    </Card>
+  );
+}
+
+function ComparisonFactorList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="border border-border p-4">
+      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{title}</div>
+      {items.length > 0 ? (
+        <ul className="mt-3 space-y-2 text-sm leading-5 text-foreground">
+          {items.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      ) : (
+        <div className="mt-3 text-sm text-muted-foreground">No signal.</div>
+      )}
+    </div>
+  );
+}
+
+const NOVELTY_LABELS: Record<string, string> = {
+  new: "New topic",
+  ongoing: "Ongoing",
+  resurgent: "Resurgent",
+};
+
+const NOVELTY_COLORS: Record<string, string> = {
+  new: "text-emerald-700 bg-emerald-500/15 dark:text-emerald-300",
+  ongoing: "text-primary bg-primary/10",
+  resurgent: "text-amber-600 bg-amber-500/15 dark:text-amber-400",
+};
+
+function SummaryCard({ title, children, isBaseline }: { title: string; children: ReactNode; isBaseline?: boolean }) {
+  return (
+    <div className="border border-border bg-card p-4">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</span>
+        {isBaseline && (
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">без LLM</span>
+        )}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function TopicSummarySection({ clusterId }: { clusterId: string }) {
+  const queryClient = useQueryClient();
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const { data: bundle, isLoading, error } = useTopicSummary(clusterId);
+
+  async function handleRegenerate() {
+    setIsRegenerating(true);
+    try {
+      const result = await api.regenerateTopicSummary(clusterId);
+      queryClient.setQueryData(["topicSummary", clusterId, "ru"], result);
+    } catch {
+      // error visible in UI on next render
+    } finally {
+      setIsRegenerating(false);
+    }
+  }
+
+  const { summaries, model, generated_at } = (bundle ?? {}) as Partial<TopicSummaryBundle>;
+
+  return (
+    <SectionShell title="Краткая сводка" description="AI-сводка на основе ключевых сообщений и данных темы">
+      <div className="flex items-center justify-between gap-3 border border-border bg-muted/20 px-4 py-2.5">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Sparkles className="h-3.5 w-3.5 text-primary" />
+          {model ? (
+            <span>{model.name} · {generated_at ? formatDateTime(generated_at) : "—"}</span>
+          ) : (
+            <span>Сводка не сгенерирована</span>
+          )}
+        </div>
+        <button
+          onClick={handleRegenerate}
+          disabled={isRegenerating || isLoading}
+          className="flex items-center gap-1.5 rounded border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+        >
+          {isRegenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+          {isRegenerating ? "Генерация…" : "Обновить сводку"}
+        </button>
+      </div>
+
+      {isLoading && (
+        <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          Генерация сводки…
+        </div>
+      )}
+
+      {!isLoading && (error || !bundle) && (
+        <EmptyAnalyticState>Сводка пока недоступна. Нажмите «Обновить сводку».</EmptyAnalyticState>
+      )}
+
+      {!isLoading && bundle && summaries && (
+        <div className="space-y-4">
+          <div className="grid gap-4 lg:grid-cols-3">
+            <SummaryCard title="Сводка" isBaseline={summaries.short?.status === "ok_baseline"}>
+              {summaries.short ? (
+                <div className="space-y-2">
+                  <p className="text-sm leading-6 text-foreground">{summaries.short.summary}</p>
+                  {summaries.short.key_points?.length > 0 && (
+                    <ul className="mt-2 space-y-1">
+                      {summaries.short.key_points.map((point, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
+                          <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+                          {point}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Нет данных</p>
+              )}
+            </SummaryCard>
+
+            <SummaryCard title="Хронология">
+              {summaries.timeline?.events?.length ? (
+                <div className="space-y-3">
+                  {summaries.timeline.events.map((event, i) => (
+                    <div key={i} className="border-l-2 border-primary pl-3">
+                      <div className="text-xs text-muted-foreground">{event.when}</div>
+                      <div className="mt-0.5 text-sm text-foreground">{event.what}</div>
+                      {event.source_channel && (
+                        <div className="mt-0.5 text-xs text-muted-foreground">@{event.source_channel}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Нет данных</p>
+              )}
+            </SummaryCard>
+
+            <SummaryCard title="Ключевые акторы" isBaseline={summaries.key_actors?.status === "ok_baseline"}>
+              {summaries.key_actors?.actors?.length ? (
+                <div className="space-y-3">
+                  {summaries.key_actors.actors.map((actor, i) => (
+                    <div key={i} className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-foreground">{actor.name}</span>
+                        {actor.role && (
+                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{actor.role}</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">{actor.why_matters}</p>
+                      {actor.mention_count > 0 && (
+                        <p className="text-[10px] text-muted-foreground">{actor.mention_count} упоминаний</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Нет данных</p>
+              )}
+            </SummaryCard>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <SummaryCard title="Почему важно">
+              {summaries.why_important ? (
+                <div className="space-y-3">
+                  <p className="text-sm leading-6 text-foreground">{summaries.why_important.why_important}</p>
+                  {summaries.why_important.drivers?.length > 0 && (
+                    <div className="space-y-2">
+                      {summaries.why_important.drivers.map((driver, i) => (
+                        <div key={i} className="flex items-start gap-2">
+                          <span className="mt-0.5 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                            {Math.round(driver.weight * 100)}%
+                          </span>
+                          <div>
+                            <span className="text-xs font-medium text-foreground">{driver.name}</span>
+                            <p className="text-xs text-muted-foreground">{driver.explanation}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Нет данных</p>
+              )}
+            </SummaryCard>
+
+            <SummaryCard title="Что изменилось">
+              {summaries.what_changed ? (
+                <div className="space-y-3">
+                  <p className="text-sm leading-6 text-foreground">{summaries.what_changed.summary}</p>
+                  {summaries.what_changed.changes?.length > 0 && (
+                    <div className="space-y-2">
+                      {summaries.what_changed.changes.map((change, i) => (
+                        <div key={i} className="border-l-2 border-border pl-3">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">{change.period}</span>
+                            <span className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
+                              {Math.round(change.severity * 100)}%
+                            </span>
+                          </div>
+                          <p className="mt-0.5 text-sm text-foreground">{change.change_description}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Нет данных</p>
+              )}
+            </SummaryCard>
+
+            <SummaryCard title="Новизна">
+              {summaries.novelty ? (
+                <div className="space-y-3">
+                  <span
+                    className={cn(
+                      "inline-flex rounded px-2 py-0.5 text-xs font-semibold uppercase tracking-wide",
+                      NOVELTY_COLORS[summaries.novelty.novelty_verdict] ?? "bg-muted text-muted-foreground"
+                    )}
+                  >
+                    {NOVELTY_LABELS[summaries.novelty.novelty_verdict] ?? summaries.novelty.novelty_verdict}
+                  </span>
+                  <p className="text-sm leading-6 text-foreground">{summaries.novelty.rationale}</p>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Нет данных</p>
+              )}
+            </SummaryCard>
+          </div>
+        </div>
+      )}
+    </SectionShell>
+  );
+}
+
+function TopicNoveltyPanel({ detail }: { detail: TopicDetail }) {
+  const novelty = detail.novelty;
+  const newEntities = novelty?.explanation?.new_entities ?? [];
+  const reasons = novelty?.explanation?.reasons ?? [];
+  const features = novelty?.features ?? {};
+  const firstChannels = (detail.top_channels?.length ? detail.top_channels : detail.channels).slice(0, 5);
+  const history = detail.similar_history ?? [];
+
+  return (
+    <SectionShell title="Novelty" description="Multi-signal explanation against historical topics, entities, sources and dynamics.">
+      <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+        <Card className="rounded-none">
+          <CardHeader>
+            <CardTitle>Why this topic is new</CardTitle>
+          </CardHeader>
+          <div className="flex items-center gap-3">
+            <div className="flex h-14 w-14 items-center justify-center rounded-md bg-primary/10 text-primary">
+              <Sparkles className="h-6 w-6" />
+            </div>
+            <div>
+              <div className="text-2xl font-semibold text-foreground">
+                {formatScore(novelty?.novelty_score ?? detail.novelty_score) || "Pending"}
+              </div>
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                {novelty?.novelty_status ?? detail.novelty_status ?? "not scored"}
+              </div>
+            </div>
+          </div>
+          {novelty?.explanation?.summary && (
+            <p className="mt-4 text-sm leading-6 text-foreground">{novelty.explanation.summary}</p>
+          )}
+          <div className="mt-4 space-y-2">
+            {reasons.length > 0 ? reasons.slice(0, 4).map((reason) => (
+              <div key={reason} className="border-l-2 border-primary pl-3 text-sm text-muted-foreground">
+                {reason}
+              </div>
+            )) : (
+              <EmptyAnalyticState>Novelty explanation is not available yet.</EmptyAnalyticState>
+            )}
+          </div>
+        </Card>
+
+        <div className="grid gap-6 md:grid-cols-2">
+          <Card className="rounded-none">
+            <CardHeader>
+              <CardTitle>Feature scores</CardTitle>
+            </CardHeader>
+            <div className="space-y-2">
+              {Object.entries(features).length > 0 ? Object.entries(features).map(([name, value]) => (
+                <div key={name} className="flex items-center justify-between gap-3">
+                  <span className="text-xs text-muted-foreground">{name.replaceAll("_", " ")}</span>
+                  <span className="font-mono text-xs text-foreground">{Number(value).toFixed(2)}</span>
+                </div>
+              )) : (
+                <EmptyAnalyticState>No feature breakdown was returned.</EmptyAnalyticState>
+              )}
+            </div>
+          </Card>
+
+          <Card className="rounded-none">
+            <CardHeader>
+              <CardTitle>New entities</CardTitle>
+            </CardHeader>
+            <div className="flex flex-wrap gap-2">
+              {newEntities.length > 0 ? newEntities.slice(0, 12).map((entity) => (
+                <Badge key={entity}>{entity}</Badge>
+              )) : (
+                <span className="text-sm text-muted-foreground">No unseen entities detected.</span>
+              )}
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      <div className="mt-6 grid gap-6 xl:grid-cols-[0.7fr_1.3fr]">
+        <Card className="rounded-none">
+          <CardHeader>
+            <CardTitle>First channels</CardTitle>
+          </CardHeader>
+          <div className="space-y-2">
+            {firstChannels.map((channel) => (
+              <div key={channel.channel} className="flex items-center justify-between text-sm">
+                <span className="truncate text-foreground">{channel.channel}</span>
+                <span className="text-muted-foreground">{channel.count}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="rounded-none">
+          <CardHeader>
+            <CardTitle>Similar historical topics</CardTitle>
+          </CardHeader>
+          <div className="space-y-3">
+            {history.length > 0 ? history.map((item) => (
+              <Link key={item.cluster_id} href={`/topics/${item.cluster_id}`}>
+                <div className="grid gap-2 border border-border px-3 py-2 transition-colors hover:bg-accent md:grid-cols-[1fr_auto]">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-foreground">{item.cluster_id}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {formatNumber(item.message_count)} messages · {formatDateTime(item.first_seen)} - {formatDateTime(item.last_seen)}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {item.keywords.slice(0, 4).map((keyword) => <Badge key={keyword}>{keyword}</Badge>)}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-semibold text-foreground">{item.overall_similarity.toFixed(2)}</div>
+                    <div className="text-[11px] uppercase text-muted-foreground">similarity</div>
+                  </div>
+                </div>
+              </Link>
+            )) : (
+              <EmptyAnalyticState>No historical similarity links were found.</EmptyAnalyticState>
+            )}
+          </div>
+        </Card>
+      </div>
+    </SectionShell>
+  );
+}
+
 export default function TopicDetailPage({ params }: { params: Promise<{ clusterId: string }> }) {
   const { clusterId } = use(params);
+  const [compareClusterId, setCompareClusterId] = useState<ClusterId | null>(null);
+  const { preset } = useGlobalTimeRange();
   const { data: detail, isLoading } = useTopicDetail(clusterId);
+  const { data: topics = [] } = useTopics();
+  const timelineBucket = preset === "7d" || preset === "30d" ? "1d" : "1h";
+  const timelineQuery = useTopicTimeline(clusterId, timelineBucket);
+  const graphMetricsQuery = useTopicGraphMetrics(clusterId);
+  const comparisonQuery = useTopicComparison(clusterId, compareClusterId);
+  const comparisonTopics = useMemo(() => {
+    if (!detail) return topics.filter((topic) => topic.cluster_id !== clusterId);
+    const relatedIds = new Set(detail.related_topics.map((topic) => topic.cluster_id));
+    return [...topics].sort((left, right) => {
+      const leftRelated = relatedIds.has(left.cluster_id) ? 1 : 0;
+      const rightRelated = relatedIds.has(right.cluster_id) ? 1 : 0;
+      return rightRelated - leftRelated || right.message_count - left.message_count;
+    });
+  }, [clusterId, detail, topics]);
 
   if (isLoading || !detail) {
     return (
@@ -158,7 +922,15 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
   }
 
   const sourceDisplay = detail.first_source?.display_source;
-  const graph = detail.graph_analytics;
+  const graph = normalizeGraphAnalytics(detail, graphMetricsQuery.data);
+  const timelineAnnotations = normalizeTimelineAnnotations(detail, timelineQuery.data?.events, timelineQuery.data?.points);
+  const noveltyScore = deriveNoveltyScore(detail);
+  const volumeTimeline = detail.volume_timeline.length > 0
+    ? detail.volume_timeline
+    : (timelineQuery.data?.points || []).map((point) => ({
+        time: point.bucket_start,
+        count: point.message_count,
+      }));
   const growth = detail.kpi_metrics?.growth_rate ?? latestDelta(detail.volume_timeline);
   const sourceConfidence =
     detail.source_provenance?.source_confidence ?? sourceDisplay?.source_confidence ?? null;
@@ -166,52 +938,85 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
   const summary =
     detail.summary ||
     `${formatNumber(detail.message_count)} messages across ${detail.channel_count} channels since ${formatDateTime(detail.first_seen)}.`;
+  const firstSource =
+    detail.source_provenance?.first_source_channel || sourceDisplay?.source_channel || "Unknown";
+  const topActor = detail.top_entities[0]?.text || "No entities";
+  const reviewStatus = detail.review?.status || (detail.confidence_score != null && detail.confidence_score < 0.55 ? "needs review" : "not reviewed");
 
-  const kpiMetrics: MetricItem[] = [
-    { label: "Messages", value: formatNumber(detail.message_count), hint: "Cluster volume", icon: <Hash className="h-4 w-4" /> },
-    { label: "Channels", value: formatNumber(detail.channel_count), hint: "Distinct publishers", icon: <Radio className="h-4 w-4" /> },
-    { label: "Avg sentiment", value: detail.avg_sentiment.toFixed(2), hint: "Mean message score", icon: <Activity className="h-4 w-4" /> },
+  const attentionMetrics: MetricItem[] = [
     {
       label: "Importance",
-      value: formatScore(detail.kpi_metrics?.importance_score),
-      hint: "Needs backend score",
+      value: detail.importance_score != null ? `${detail.importance_score.toFixed(2)} (${detail.importance_level})` : formatScore(detail.kpi_metrics?.importance_score),
+      hint: detail.importance_level ? `Level: ${detail.importance_level}` : "Awaiting scoring run",
+      state: detail.importance_score != null ? "available" : "pending",
       icon: <Gauge className="h-4 w-4" />,
     },
     {
       label: "Novelty",
-      value: formatScore(detail.kpi_metrics?.novelty_score),
+      value: formatScore(noveltyScore),
       hint: "Newness against recent topics",
       icon: <CircleDot className="h-4 w-4" />,
     },
     {
-      label: "Growth rate",
+      label: "Growth",
       value: formatPercent(growth, true),
-      hint: detail.kpi_metrics?.growth_rate === undefined ? "Estimated from timeline" : "Backend metric",
+      hint: detail.kpi_metrics?.growth_rate === undefined ? "Estimated from latest volume buckets" : "Volume trend",
       icon: <TrendingUp className="h-4 w-4" />,
     },
+    { label: "Volume", value: formatNumber(detail.message_count), hint: "Messages in this topic", icon: <Hash className="h-4 w-4" /> },
+  ];
+
+  const contextMetrics: MetricItem[] = [
+    { label: "Spread", value: formatNumber(detail.channel_count), hint: "Distinct channels", icon: <Radio className="h-4 w-4" /> },
     {
-      label: "Communities",
-      value: graph?.communities_count,
-      hint: "Graph analytics",
-      icon: <Network className="h-4 w-4" />,
+      label: "Freshness",
+      value: formatAge(detail.last_seen),
+      hint: `${formatDateTime(detail.first_seen)} -> ${formatDateTime(detail.last_seen)}`,
+      icon: <RefreshCw className="h-4 w-4" />,
     },
     {
-      label: "Graph density",
-      value: graph?.density !== undefined && graph?.density !== null ? graph.density.toFixed(3) : null,
-      hint: "Edges over possible edges",
-      icon: <Share2 className="h-4 w-4" />,
+      label: "First source",
+      value: firstSource,
+      hint: `First seen ${formatDateTime(detail.source_provenance?.first_seen || sourceDisplay?.source_message_date || detail.first_seen)}`,
+      icon: <ShieldCheck className="h-4 w-4" />,
+    },
+    { label: "Key actor", value: topActor, hint: "Top mentioned entity", icon: <Users className="h-4 w-4" /> },
+  ];
+
+  const moodMetrics: MetricItem[] = [
+    { label: "Avg sentiment", value: detail.avg_sentiment.toFixed(2), hint: "Mean message score", icon: <Activity className="h-4 w-4" /> },
+    {
+      label: "Balance",
+      value: formatSentimentBalance(detail.sentiment_breakdown),
+      hint: "Positive / neutral / negative",
+      icon: <Split className="h-4 w-4" />,
+    },
+  ];
+
+  const qualityMetrics: MetricItem[] = [
+    {
+      label: "Confidence",
+      value: formatScore(detail.confidence_score),
+      hint: "Topic assignment confidence",
+      icon: <ShieldCheck className="h-4 w-4" />,
     },
     {
-      label: "Bridge nodes",
-      value: graph?.bridge_nodes_count,
-      hint: "Cross-community connectors",
-      icon: <GitBranch className="h-4 w-4" />,
+      label: "Review status",
+      value: reviewStatus,
+      hint: detail.review?.source ? `Source: ${detail.review.source}` : "Human review state",
+      icon: <ListChecks className="h-4 w-4" />,
     },
     {
       label: "Source confidence",
       value: formatPercent(sourceConfidence),
       hint: "Exact or inferred provenance",
       icon: <ShieldCheck className="h-4 w-4" />,
+    },
+    {
+      label: "Stability",
+      value: formatScore(detail.stability_score),
+      hint: "Quality signal for cluster consistency",
+      icon: <GitBranch className="h-4 w-4" />,
     },
   ];
 
@@ -289,12 +1094,79 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
             </div>
           </section>
 
-          <SectionShell title="KPI metrics" description="Primary decision metrics for the selected topic. Pending cells are ready for backend fields.">
-            <div className="grid overflow-hidden border border-border sm:grid-cols-2 lg:grid-cols-5">
-              {kpiMetrics.map((metric, index) => (
-                <MetricTile key={metric.label} metric={metric} index={index} />
-              ))}
+          <TopicSummarySection clusterId={clusterId} />
+
+          <SectionShell title="Topic metrics" description="Grouped by analyst intent: attention, context, mood and quality.">
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Attention</h3>
+                <div className="grid overflow-hidden border border-border sm:grid-cols-2">
+                  {attentionMetrics.map((metric, index) => (
+                    <MetricTile key={metric.label} metric={metric} index={index} />
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Context</h3>
+                <div className="grid overflow-hidden border border-border sm:grid-cols-2">
+                  {contextMetrics.map((metric, index) => (
+                    <MetricTile key={metric.label} metric={metric} index={index} />
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Mood</h3>
+                <div className="grid overflow-hidden border border-border sm:grid-cols-2">
+                  {moodMetrics.map((metric, index) => (
+                    <MetricTile key={metric.label} metric={metric} index={index} />
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Quality</h3>
+                <div className="grid overflow-hidden border border-border sm:grid-cols-2">
+                  {qualityMetrics.map((metric, index) => (
+                    <MetricTile key={metric.label} metric={metric} index={index} />
+                  ))}
+                </div>
+              </div>
             </div>
+          </SectionShell>
+
+          <TopicNoveltyPanel detail={detail} />
+
+          <SectionShell title="Quality diagnostics" description="Technical reproducibility metadata is available for audit and debugging, outside the primary analyst metrics.">
+            <details className="border border-border bg-card p-4">
+              <summary className="cursor-pointer text-sm font-medium text-foreground">Model run details</summary>
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="border border-border bg-card p-4">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Embedding model</div>
+                  <div className="mt-2 break-words text-sm font-medium text-foreground">{detail.model?.embedding_model || "Unknown"}</div>
+                </div>
+                <div className="border border-border bg-card p-4">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Run version</div>
+                  <div className="mt-2 text-sm font-medium text-foreground">{detail.model?.model_version || "Unknown"}</div>
+                </div>
+                <div className="border border-border bg-card p-4">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Config hash</div>
+                  <div className="mt-2 font-mono text-sm text-foreground">{detail.model?.config_hash || "Pending"}</div>
+                </div>
+                <div className="border border-border bg-card p-4">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Dataset version</div>
+                  <div className="mt-2 text-sm font-medium text-foreground">{detail.model?.dataset_version || "Unknown"}</div>
+                </div>
+              </div>
+              {detail.model?.config && (
+                <div className="mt-3 grid gap-2 md:grid-cols-4">
+                  {["n_neighbors", "n_components", "min_cluster_size", "min_samples", "top_n_words", "nr_topics", "seed"].map((key) => (
+                    <div key={key} className="border border-border bg-card px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{key}</div>
+                      <div className="mt-1 text-sm text-foreground">{String(detail.model?.config?.[key] ?? "n/a")}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </details>
           </SectionShell>
 
           <SectionShell title="Dynamics" description="Volume trend, growth signal and timeline events.">
@@ -303,8 +1175,8 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
                 <CardHeader>
                   <CardTitle>Message volume</CardTitle>
                 </CardHeader>
-                {detail.volume_timeline.length > 0 ? (
-                  <VolumeLineChart data={detail.volume_timeline} />
+                {volumeTimeline.length > 0 ? (
+                  <VolumeLineChart data={volumeTimeline} />
                 ) : (
                   <EmptyAnalyticState>No volume timeline was returned for this topic.</EmptyAnalyticState>
                 )}
@@ -313,9 +1185,9 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
                 <CardHeader>
                   <CardTitle>Timeline annotations</CardTitle>
                 </CardHeader>
-                {(detail.timeline_annotations || []).length > 0 ? (
+                {timelineAnnotations.length > 0 ? (
                   <div className="space-y-3">
-                    {detail.timeline_annotations!.map((event) => (
+                    {timelineAnnotations.map((event) => (
                       <div key={`${event.time}-${event.label}`} className="border-l-2 border-primary pl-3">
                         <div className="text-xs text-muted-foreground">{formatDateTime(event.time)}</div>
                         <div className="mt-1 text-sm font-medium text-foreground">{event.label}</div>
@@ -331,6 +1203,22 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
           </SectionShell>
 
           <SectionShell title="Structure" description="Topic composition by entities, channels, related clusters and sentiment.">
+            {detail.top_keywords.length > 0 && (
+              <Card className="mb-6 rounded-none">
+                <CardHeader>
+                  <CardTitle>Keywords</CardTitle>
+                  <p className="mt-1 text-xs text-muted-foreground">c-TF-IDF terms from topic model · filtered to content words ≥ 4 chars</p>
+                </CardHeader>
+                <div className="flex flex-wrap gap-2">
+                  {detail.top_keywords
+                    .filter((kw) => kw.length >= 4 && !/^\d+$/.test(kw))
+                    .slice(0, 20)
+                    .map((keyword) => (
+                      <Badge key={keyword}>{keyword}</Badge>
+                    ))}
+                </div>
+              </Card>
+            )}
             <div className="grid gap-6 xl:grid-cols-[1fr_1fr_0.8fr]">
               <Card className="rounded-none">
                 <CardHeader>
@@ -399,11 +1287,30 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
                 <EmptyAnalyticState>No related topics were returned.</EmptyAnalyticState>
               )}
             </Card>
+
+            <TopicComparisonPanel
+              currentTopic={detail}
+              topics={comparisonTopics}
+              selectedClusterId={compareClusterId}
+              onSelectCluster={setCompareClusterId}
+              comparison={comparisonQuery.data}
+              isLoading={comparisonQuery.isFetching}
+            />
           </SectionShell>
 
-          <SectionShell title="Graph analytics" description="Network-level metrics for structure, communities and bridges.">
-            {graph ? (
+          <SectionShell title="Graph analytics" description="Co-occurrence network of NER entities and channels within this topic (computed from PostgreSQL, not Neo4j).">
+            {graphMetricsQuery.isLoading ? (
+              <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Computing graph metrics…
+              </div>
+            ) : graph ? (
               <div className="space-y-4">
+                {graphMetricsQuery.data?.summary?.is_small_graph && (
+                  <div className="border border-amber-500/40 bg-amber-500/10 px-4 py-2.5 text-xs text-amber-700 dark:text-amber-300">
+                    Small graph · fewer than 3 nodes or 2 edges — metrics like density and communities may not be meaningful at this scale.
+                  </div>
+                )}
                 <div className="grid overflow-hidden border border-border sm:grid-cols-2 lg:grid-cols-5">
                   {graphMetrics.map((metric, index) => (
                     <MetricTile key={metric.label} metric={metric} index={index} />
@@ -412,24 +1319,34 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
                 <div className="grid gap-4 lg:grid-cols-3">
                   <div className="border border-border bg-card p-4">
                     <div className="text-xs uppercase tracking-wide text-muted-foreground">Top central entity</div>
-                    <div className="mt-2 text-sm font-semibold text-foreground">{graph.top_central_entity?.text || "Pending"}</div>
+                    <div className="mt-2 text-sm font-semibold text-foreground">{graph.top_central_entity?.text || "—"}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">Highest PageRank in entity co-occurrence graph</div>
                   </div>
                   <div className="border border-border bg-card p-4">
                     <div className="text-xs uppercase tracking-wide text-muted-foreground">Top central channel</div>
-                    <div className="mt-2 text-sm font-semibold text-foreground">{graph.top_central_channel?.channel || "Pending"}</div>
+                    <div className="mt-2 text-sm font-semibold text-foreground">{graph.top_central_channel?.channel || "—"}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">Most connected channel by PageRank</div>
                   </div>
                   <div className="border border-border bg-card p-4">
                     <div className="text-xs uppercase tracking-wide text-muted-foreground">Graph summary</div>
-                    <div className="mt-2 text-sm text-foreground">{graph.summary || "No graph summary returned."}</div>
+                    <div className="mt-2 text-sm text-foreground">{graph.summary || "—"}</div>
                   </div>
                 </div>
               </div>
             ) : (
               <EmptyAnalyticState>
-                Graph analytics were not returned by the API yet. The section is reserved for nodes, edges, communities, bridge nodes, central hubs and density.
+                {graphMetricsQuery.error
+                  ? "Failed to load graph metrics — NER data may not be available for this topic."
+                  : "No entity co-occurrence data found for this topic in the selected time window."}
               </EmptyAnalyticState>
             )}
           </SectionShell>
+
+          {detail.score_breakdown && (
+            <SectionShell title="Importance breakdown" description="Why this topic was scored the way it was. Each component contributes to the final importance score.">
+              <ImportanceBreakdownPanel breakdown={detail.score_breakdown} level={detail.importance_level} score={detail.importance_score} />
+            </SectionShell>
+          )}
 
           <SectionShell title="Source and provenance" description="Attribution, first seen signal and propagation evidence are treated as analytic inputs.">
             <SourcePanel source={detail.first_source} />

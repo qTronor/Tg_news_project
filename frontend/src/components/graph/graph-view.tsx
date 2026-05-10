@@ -4,10 +4,12 @@ import { useRef, useEffect, useCallback, useState } from "react";
 import cytoscape, { type Core, type EventObject } from "cytoscape";
 import type { GraphData, GraphNode } from "@/types";
 import { motion, AnimatePresence } from "framer-motion";
-import { Maximize2, Minus, Plus, RotateCcw, X } from "lucide-react";
+import { CalendarClock, ExternalLink, Maximize2, Minus, Plus, RotateCcw, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { SourceStatusBadge } from "@/components/topics/source-status-badge";
+import { useDemoContext } from "@/components/providers";
 import type { SourceStatus } from "@/types";
+import Link from "next/link";
 
 interface Props {
   data: GraphData;
@@ -40,9 +42,35 @@ function sourceStatusColor(status?: SourceStatus): string | null {
   }
 }
 
-function nodeSize(weight?: number): number {
+function nodeSize(type: string, weight?: number): number {
   const safeWeight = Number.isFinite(weight) && weight ? weight : 1;
+  if (type === "message") {
+    return Math.max(8, Math.min(15, 7 + Math.sqrt(safeWeight) * 2.1));
+  }
   return Math.max(11, Math.min(34, 9 + Math.sqrt(safeWeight) * 2.8));
+}
+
+function formatMessageDate(value?: string): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function sourceGraphHref(node: GraphNode): string | null {
+  if (!node.source_event_id || !node.cluster_id) return null;
+  const params = new URLSearchParams({
+    mode: "propagation",
+    clusterId: node.cluster_id,
+    focus: `msg-${node.source_event_id}`,
+  });
+  return `/graph?${params.toString()}`;
 }
 
 function sameCommunity(edge: cytoscape.EdgeSingular): boolean {
@@ -98,6 +126,7 @@ const settleLayout: cytoscape.CoseLayoutOptions = {
 };
 
 export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
+  const { setIsDemo } = useDemoContext();
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
   const dragPullRef = useRef<Map<string, { position: cytoscape.Position; strength: number }>>(new Map());
@@ -135,7 +164,7 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
 
   const clearSelection = useCallback(() => {
     const cy = cyRef.current;
-    cy?.elements().removeClass("highlighted faded hovered");
+    cy?.elements().removeClass("highlighted faded hovered source-origin source-self");
     cy?.nodes().unselect();
     setSelectedNode(null);
   }, []);
@@ -155,8 +184,19 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
           channel: n.channel,
           messageId: n.message_id,
           messageDate: n.message_date,
+          clusterId: n.cluster_id,
+          permalink: n.permalink,
           sourceStatus: n.source_status,
+          sourceEventId: n.source_event_id,
+          sourceChannel: n.source_channel,
+          noveltyStatus: n.novelty_status,
+          noveltyScore: n.novelty_score,
+          isFirstSource: n.is_first_source,
         },
+        classes: [
+          n.novelty_status === "new" ? "new-topic" : "",
+          n.is_first_source ? "first-source" : "",
+        ].filter(Boolean).join(" "),
       })),
       ...data.edges
         .filter(e =>
@@ -192,8 +232,8 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
             "text-margin-y": 7,
             "background-color": (ele: cytoscape.NodeSingular) => nodeColor(ele.data("nodeType")),
             shape: "ellipse",
-            width: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("weight")),
-            height: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("weight")),
+            width: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("nodeType"), ele.data("weight")),
+            height: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("nodeType"), ele.data("weight")),
             "border-width": 0.75,
             "border-color": (ele: cytoscape.NodeSingular) =>
               sourceStatusColor(ele.data("sourceStatus")) || nodeColor(ele.data("nodeType")),
@@ -217,8 +257,31 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
         {
           selector: "node:selected",
           style: {
-            width: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("weight")) + 6,
-            height: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("weight")) + 6,
+            width: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("nodeType"), ele.data("weight")) + 5,
+            height: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("nodeType"), ele.data("weight")) + 5,
+          },
+        },
+        {
+          selector: "node.new-topic",
+          style: {
+            "border-width": 4,
+            "border-color": "#55d6b2",
+            "border-opacity": 0.95,
+          },
+        },
+        {
+          selector: "node.first-source, node.source-origin, node.source-self",
+          style: {
+            "border-width": 4.5,
+            "border-color": "#f6d365",
+            "border-opacity": 1,
+            "z-index": 30,
+          },
+        },
+        {
+          selector: "node.source-self",
+          style: {
+            "border-color": "#a8e6a1",
           },
         },
         {
@@ -345,27 +408,52 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
       cy.layout(settleLayout).run();
     });
 
-    cy.on("tap", "node", (evt: EventObject) => {
-      const node = evt.target;
-      const nodeData: GraphNode = {
-        id: node.data("id"),
-        label: node.data("label"),
-        type: node.data("nodeType"),
-        weight: node.data("weight"),
-        community: node.data("community"),
-        channel: node.data("channel"),
-        message_id: node.data("messageId"),
-        message_date: node.data("messageDate"),
-        source_status: node.data("sourceStatus"),
-      };
-      setSelectedNode(nodeData);
-      onNodeClick?.(nodeData);
+    const graphNodeFromCy = (node: cytoscape.NodeSingular): GraphNode => ({
+      id: node.data("id"),
+      label: node.data("label"),
+      type: node.data("nodeType"),
+      weight: node.data("weight"),
+      community: node.data("community"),
+      channel: node.data("channel"),
+      message_id: node.data("messageId"),
+      message_date: node.data("messageDate"),
+      cluster_id: node.data("clusterId"),
+      permalink: node.data("permalink"),
+      source_status: node.data("sourceStatus"),
+      source_event_id: node.data("sourceEventId"),
+      source_channel: node.data("sourceChannel"),
+      novelty_status: node.data("noveltyStatus"),
+      novelty_score: node.data("noveltyScore"),
+      is_first_source: Boolean(node.data("isFirstSource")),
+      is_focus_source: node.hasClass("source-origin") || node.hasClass("source-self"),
+      is_self_source: node.hasClass("source-self"),
+    });
 
-      cy.elements().removeClass("highlighted faded");
-      const neighborhood = node.neighborhood().add(node);
+    const highlightSelection = (node: cytoscape.NodeSingular) => {
+      cy.elements().removeClass("highlighted faded source-origin source-self");
+
+      let neighborhood = node.neighborhood().add(node);
+      const sourceEventId = node.data("sourceEventId");
+      const sourceNode = sourceEventId ? cy.getElementById(`msg-${sourceEventId}`) : null;
+
+      if (sourceNode?.length) {
+        sourceNode.addClass(sourceNode.same(node) ? "source-self" : "source-origin");
+        sourceNode.addClass("highlighted");
+        sourceNode.connectedEdges().addClass("highlighted");
+        neighborhood = neighborhood.add(sourceNode);
+      }
+
       neighborhood.addClass("highlighted");
       node.connectedEdges().addClass("highlighted");
       cy.elements().not(neighborhood).addClass("faded");
+    };
+
+    cy.on("tap", "node", (evt: EventObject) => {
+      const node = evt.target;
+      highlightSelection(node);
+      const nodeData = graphNodeFromCy(node);
+      setSelectedNode(nodeData);
+      onNodeClick?.(nodeData);
     });
 
     cy.on("tap", (evt: EventObject) => {
@@ -385,21 +473,8 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
             zoom: 1.5,
           });
           focusNode.select();
-          const neighborhood = focusNode.neighborhood().add(focusNode);
-          neighborhood.addClass("highlighted");
-          focusNode.connectedEdges().addClass("highlighted");
-          cy.elements().not(neighborhood).addClass("faded");
-          setSelectedNode({
-            id: focusNode.data("id"),
-            label: focusNode.data("label"),
-            type: focusNode.data("nodeType"),
-            weight: focusNode.data("weight"),
-            community: focusNode.data("community"),
-            channel: focusNode.data("channel"),
-            message_id: focusNode.data("messageId"),
-            message_date: focusNode.data("messageDate"),
-            source_status: focusNode.data("sourceStatus"),
-          });
+          highlightSelection(focusNode);
+          setSelectedNode(graphNodeFromCy(focusNode));
         }, 1000);
       }
     }
@@ -488,12 +563,54 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
                     <SourceStatusBadge status={selectedNode.source_status} />
                   </div>
                 )}
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {selectedNode.novelty_status === "new" && (
+                    <span className="rounded-full border border-[#55d6b2]/45 bg-[#55d6b2]/12 px-2 py-0.5 text-[11px] font-medium text-[#bdf5e6]">
+                      New topic
+                    </span>
+                  )}
+                  {selectedNode.is_first_source && (
+                    <span className="rounded-full border border-[#f6d365]/45 bg-[#f6d365]/12 px-2 py-0.5 text-[11px] font-medium text-[#f8e6a6]">
+                      First source
+                    </span>
+                  )}
+                  {selectedNode.is_focus_source && !selectedNode.is_first_source && (
+                    <span className="rounded-full border border-[#f6d365]/45 bg-[#f6d365]/12 px-2 py-0.5 text-[11px] font-medium text-[#f8e6a6]">
+                      Source of selected news
+                    </span>
+                  )}
+                </div>
                 <h3 className="mt-2 text-sm font-semibold text-[#f5f7ff]">{selectedNode.label}</h3>
               </div>
               <button onClick={clearSelection} className="text-[#9aa2bf] transition-colors hover:text-[#f5f7ff]">
                 <X className="w-4 h-4" />
               </button>
             </div>
+            {selectedNode.type === "message" && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {sourceGraphHref(selectedNode) && (
+                  <Link
+                    href={sourceGraphHref(selectedNode)!}
+                    onClick={() => setIsDemo(false)}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-[#6f78ff] px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[#8289ff]"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Первоисточник
+                  </Link>
+                )}
+                {selectedNode.permalink && (
+                  <a
+                    href={selectedNode.permalink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-white/10 px-2.5 py-1.5 text-xs font-medium text-[#d9ddef] transition-colors hover:bg-white/10 hover:text-white"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Telegram
+                  </a>
+                )}
+              </div>
+            )}
             <div className="mt-3 space-y-1.5 text-xs text-[#aeb5cf]">
               <div className="flex justify-between">
                 <span>Weight</span>
@@ -515,6 +632,29 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
                 <div className="flex justify-between">
                   <span>Message</span>
                   <span className="font-medium text-[#f5f7ff]">#{selectedNode.message_id}</span>
+                </div>
+              )}
+              {selectedNode.message_date && (
+                <div className="flex items-center justify-between gap-3">
+                  <span className="inline-flex items-center gap-1">
+                    <CalendarClock className="h-3.5 w-3.5" />
+                    Published
+                  </span>
+                  <span className="text-right font-medium text-[#f5f7ff]">
+                    {formatMessageDate(selectedNode.message_date)}
+                  </span>
+                </div>
+              )}
+              {selectedNode.source_channel && (
+                <div className="flex justify-between">
+                  <span>First source</span>
+                  <span className="font-medium text-[#f5f7ff]">{selectedNode.source_channel}</span>
+                </div>
+              )}
+              {selectedNode.novelty_score !== undefined && selectedNode.novelty_score !== null && (
+                <div className="flex justify-between">
+                  <span>Novelty</span>
+                  <span className="font-medium text-[#f5f7ff]">{Math.round(selectedNode.novelty_score * 100)}%</span>
                 </div>
               )}
               {"source_status" in selectedNode && selectedNode.source_status && (

@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://tg-news-project.local/schemas/sentiment_enriched.v1.json",
+  "$id": "https://tg-news-project.local/schemas/sentiment_enriched.v2.json",
   "title": "Sentiment Enriched Event",
-  "description": "Message enriched with sentiment analysis results",
+  "description": "Message enriched with multilingual sentiment and emotion analysis results",
   "type": "object",
   "required": [
     "event_id",
@@ -101,62 +101,21 @@
         },
         "emotions": {
           "type": ["object", "null"],
-          "description": "Fine-grained emotion detection",
+          "description": "Fine-grained emotion probabilities. Only labels predicted by the active emotion model are present; others are absent (explicit partial coverage). null when no emotion model is available for this language.",
           "properties": {
-            "anger": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            },
-            "fear": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            },
-            "joy": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            },
-            "sadness": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            },
-            "surprise": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            },
-            "disgust": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            }
-          }
+            "anger": { "type": "number", "minimum": 0, "maximum": 1 },
+            "fear":  { "type": "number", "minimum": 0, "maximum": 1 },
+            "joy":   { "type": "number", "minimum": 0, "maximum": 1 },
+            "sadness":  { "type": "number", "minimum": 0, "maximum": 1 },
+            "surprise": { "type": "number", "minimum": 0, "maximum": 1 },
+            "disgust":  { "type": "number", "minimum": 0, "maximum": 1 }
+          },
+          "additionalProperties": false
         },
-        "aspects": {
-          "type": "array",
-          "description": "Aspect-based sentiment analysis",
-          "items": {
-            "type": "object",
-            "required": ["aspect", "sentiment"],
-            "properties": {
-              "aspect": {
-                "type": "string",
-                "description": "Detected aspect/topic"
-              },
-              "sentiment": {
-                "type": "string",
-                "enum": ["positive", "negative", "neutral"]
-              },
-              "score": {
-                "type": "number",
-                "minimum": 0,
-                "maximum": 1
-              }
-            }
-          }
+        "aspects_status": {
+          "type": "string",
+          "enum": ["supported", "not_supported_v1"],
+          "description": "Whether aspect-based sentiment analysis ran. 'not_supported_v1' until an ABSA model is integrated."
         },
         "model": {
           "type": "object",
@@ -165,17 +124,26 @@
           "properties": {
             "name": {
               "type": "string",
-              "description": "Model name",
-              "examples": ["rubert-tiny-sentiment"]
+              "description": "Sentiment model HuggingFace ID",
+              "examples": ["cointegrated/rubert-tiny-sentiment-balanced", "cardiffnlp/twitter-xlm-roberta-base-sentiment"]
             },
             "version": {
               "type": "string",
-              "description": "Model version"
+              "description": "Model version tag"
             },
             "framework": {
               "type": "string",
               "description": "ML framework",
-              "examples": ["transformers", "pytorch"]
+              "examples": ["transformers"]
+            },
+            "language": {
+              "type": "string",
+              "description": "Backend routing language key: 'ru' for rubert, 'multilingual' for XLM-R",
+              "examples": ["ru", "multilingual"]
+            },
+            "emotion_model": {
+              "type": ["string", "null"],
+              "description": "Emotion model HuggingFace ID, or null if no emotion backend ran"
             }
           }
         },

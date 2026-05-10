@@ -27,6 +27,19 @@ $env:TG_API_ID="123456"
 $env:TG_API_HASH="0123456789abcdef0123456789abcdef"
 ```
 
+If Telegram must be reached through a proxy, set:
+
+```bash
+$env:TG_PROXY_ENABLED="true"
+$env:TG_PROXY_SCHEME="socks5"
+$env:TG_PROXY_HOST="proxy.example.com"
+$env:TG_PROXY_PORT="1080"
+# Optional:
+# $env:TG_PROXY_USERNAME="user"
+# $env:TG_PROXY_PASSWORD="secret"
+# $env:TG_PROXY_RDNS="true"
+```
+
 ### One-shot collection
 
 The first run may ask for phone and login code and then create a local `.session` file.
@@ -69,6 +82,7 @@ python -m collector.cli make-session
 ```
 
 Save the printed value into `TG_STRING_SESSION` and use it for server or container runs.
+`make-session` uses the same `TG_PROXY_*` variables, so the login handshake can also go through the proxy.
 
 ## Output
 
@@ -87,6 +101,10 @@ TG_API_ID=your_api_id_here
 TG_API_HASH=your_api_hash_here
 # Optional:
 # TG_STRING_SESSION=your_string_session_here
+# TG_PROXY_ENABLED=true
+# TG_PROXY_SCHEME=socks5
+# TG_PROXY_HOST=proxy.example.com
+# TG_PROXY_PORT=1080
 ```
 
 2. Make sure `config.yaml` exists.

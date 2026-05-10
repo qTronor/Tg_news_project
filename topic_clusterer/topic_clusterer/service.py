@@ -14,17 +14,13 @@ from uuid import UUID
 
 import sqlite3
 import asyncpg
-import hdbscan
 import numpy as np
-import torch
-import umap
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.structs import OffsetAndMetadata, TopicPartition
 from aiohttp import web
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from sentence_transformers import SentenceTransformer
-
 from topic_clusterer.config import AppConfig
+from topic_clusterer.embeddings_backend import build_embeddings_backend
 from topic_clusterer.metrics import (
     BUFFER_SIZE,
     CLUSTERING_DURATION,
@@ -34,6 +30,22 @@ from topic_clusterer.metrics import (
     MESSAGES_DLQ,
     MESSAGES_PROCESSED,
     PROCESSING_LATENCY,
+)
+from topic_clusterer.novelty import (
+    NOVELTY_ALGO_VERSION,
+    TopicSnapshot,
+    calculate_topic_novelty,
+    weighted_counts,
+)
+from topic_clusterer.pipeline import (
+    Clusterer,
+    CorpusItem,
+    DimensionalityReducer,
+    OutlierHandler,
+    TopicMerger,
+    TopicModelingPipeline,
+    TopicRepresenter,
+    config_hash,
 )
 from topic_clusterer.schemas import JsonSchemaValidator, SchemaValidationError
 from topic_clusterer.utils import decode_kafka_key, parse_iso_datetime, utc_now_iso
@@ -103,6 +115,122 @@ SET run_timestamp = EXCLUDED.run_timestamp,
     n_clusters = EXCLUDED.n_clusters,
     config_json = EXCLUDED.config_json,
     duration_seconds = EXCLUDED.duration_seconds;
+"""
+
+INSERT_TOPIC_CLUSTER_METADATA_PG_SQL = """
+INSERT INTO topic_cluster_metadata (
+    public_cluster_id,
+    run_id,
+    cluster_id,
+    centroid_json,
+    keywords_json,
+    representative_messages_json,
+    top_entities_json,
+    top_channels_json,
+    time_distribution_json,
+    confidence_score,
+    stability_score,
+    metadata_json
+)
+VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12::jsonb)
+ON CONFLICT (public_cluster_id) DO UPDATE
+SET centroid_json = EXCLUDED.centroid_json,
+    keywords_json = EXCLUDED.keywords_json,
+    representative_messages_json = EXCLUDED.representative_messages_json,
+    top_entities_json = EXCLUDED.top_entities_json,
+    top_channels_json = EXCLUDED.top_channels_json,
+    time_distribution_json = EXCLUDED.time_distribution_json,
+    confidence_score = EXCLUDED.confidence_score,
+    stability_score = EXCLUDED.stability_score,
+    metadata_json = EXCLUDED.metadata_json,
+    created_at = NOW();
+"""
+
+UPSERT_TOPIC_HISTORY_SQL = """
+INSERT INTO topic_history (
+    public_cluster_id,
+    run_id,
+    cluster_id,
+    first_seen,
+    last_seen,
+    message_count,
+    channel_count,
+    avg_sentiment,
+    centroid_json,
+    keywords_json,
+    entities_json,
+    channels_json,
+    metadata_json,
+    updated_at
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, NOW())
+ON CONFLICT (public_cluster_id) DO UPDATE SET
+    run_id = EXCLUDED.run_id,
+    cluster_id = EXCLUDED.cluster_id,
+    first_seen = EXCLUDED.first_seen,
+    last_seen = EXCLUDED.last_seen,
+    message_count = EXCLUDED.message_count,
+    channel_count = EXCLUDED.channel_count,
+    avg_sentiment = EXCLUDED.avg_sentiment,
+    centroid_json = EXCLUDED.centroid_json,
+    keywords_json = EXCLUDED.keywords_json,
+    entities_json = EXCLUDED.entities_json,
+    channels_json = EXCLUDED.channels_json,
+    metadata_json = EXCLUDED.metadata_json,
+    updated_at = EXCLUDED.updated_at;
+"""
+
+INSERT_TOPIC_NOVELTY_SCORE_SQL = """
+INSERT INTO topic_novelty_scores (
+    public_cluster_id,
+    run_id,
+    novelty_score,
+    novelty_status,
+    nearest_topic_id,
+    features_json,
+    explanation_json,
+    algorithm_version,
+    calculated_at
+)
+VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, NOW());
+"""
+
+INSERT_TOPIC_LIFECYCLE_EVENT_SQL = """
+INSERT INTO topic_lifecycle_events (
+    public_cluster_id,
+    run_id,
+    event_type,
+    event_time,
+    related_topic_id,
+    confidence,
+    details_json
+)
+VALUES ($1, $2, $3, NOW(), $4, $5, $6::jsonb);
+"""
+
+UPSERT_TOPIC_SIMILARITY_LINK_SQL = """
+INSERT INTO topic_similarity_links (
+    source_cluster_id,
+    target_cluster_id,
+    run_id,
+    semantic_similarity,
+    entity_overlap,
+    channel_overlap,
+    keyword_overlap,
+    overall_similarity,
+    evidence_json,
+    calculated_at
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW())
+ON CONFLICT (source_cluster_id, target_cluster_id) DO UPDATE SET
+    run_id = EXCLUDED.run_id,
+    semantic_similarity = EXCLUDED.semantic_similarity,
+    entity_overlap = EXCLUDED.entity_overlap,
+    channel_overlap = EXCLUDED.channel_overlap,
+    keyword_overlap = EXCLUDED.keyword_overlap,
+    overall_similarity = EXCLUDED.overall_similarity,
+    evidence_json = EXCLUDED.evidence_json,
+    calculated_at = EXCLUDED.calculated_at;
 """
 
 SELECT_CLUSTER_ASSIGNMENT_REFS_SQL = """
@@ -211,6 +339,14 @@ class NonRetriableError(Exception):
         self.reason = reason
 
 
+def _dt_iso(value: Optional[datetime]) -> Optional[str]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 @dataclass
 class MessageContext:
     event_id: str
@@ -257,6 +393,7 @@ class ClusteringRunBatch:
     config_json: dict[str, Any]
     duration_seconds: float
     assignments: list[dict[str, Any]]
+    topic_metadata: dict[int, Any]
 
 
 class TopicClustererService:
@@ -279,50 +416,20 @@ class TopicClustererService:
         self._metrics_site: Optional[web.TCPSite] = None
         self._clustering_task: Optional[asyncio.Task] = None
         self._clustering_lock = asyncio.Lock()
-        self._model_lock = asyncio.Lock()
-        self._sbert = None
-        self._device = self._resolve_device(config.model.device)
+        self._embeddings_backend = build_embeddings_backend(config)
         logger.info(
-            "topic model configured name=%s device=%s",
-            config.model.sbert_model,
-            self._device,
+            "topic model configured name=%s backend=%s",
+            self._embedding_model_name(),
+            config.model.backend,
         )
 
-    @staticmethod
-    def _resolve_device(requested_device: str) -> str:
-        normalized = (requested_device or "auto").strip().lower()
-        if normalized == "auto":
-            return "cuda" if torch.cuda.is_available() else "cpu"
-        if normalized.startswith("cuda") and not torch.cuda.is_available():
-            logger.warning(
-                "cuda requested for topic model but unavailable, falling back to cpu"
-            )
-            return "cpu"
-        return normalized
-
     async def _ensure_model_loaded(self) -> None:
-        if self._sbert is not None:
-            return
-        async with self._model_lock:
-            if self._sbert is not None:
-                return
-            model_kwargs: dict[str, Any] = {
-                "device": self._device,
-            }
-            if self._config.model.cache_dir:
-                model_kwargs["cache_folder"] = self._config.model.cache_dir
-            logger.info(
-                "loading sbert model name=%s device=%s",
-                self._config.model.sbert_model,
-                self._device,
-            )
-            self._sbert = SentenceTransformer(
-                self._config.model.sbert_model,
-                **model_kwargs,
-            )
-            if self._device == "cuda" and self._config.model.use_float16:
-                self._sbert.half()
-            logger.info("sbert model loaded")
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._embeddings_backend.ensure_loaded)
+
+    def _embedding_model_name(self) -> str:
+        selected = self._config.model.embedding_model or self._config.model.sbert_model
+        return self._config.model.embedding_models.get(selected, selected)
 
     async def start(self) -> None:
         await self._start_db()
@@ -732,11 +839,14 @@ class TopicClustererService:
 
     async def _compute_embedding(self, text: str) -> np.ndarray:
         await self._ensure_model_loaded()
-        return self._sbert.encode(
-            text,
-            normalize_embeddings=self._config.model.normalize_embeddings,
-            batch_size=self._config.model.batch_size,
-            show_progress_bar=False,
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: self._embeddings_backend.compute(
+                text,
+                normalize=self._config.model.normalize_embeddings,
+                batch_size=self._config.model.batch_size,
+            ),
         )
 
     # ── clustering scheduler ────────────────────────────────────────
@@ -767,6 +877,7 @@ class TopicClustererService:
                     break
                 await self._persist_clustering_run_pg(batch)
                 await self._publish_assignment_events(batch)
+                await self._publish_novelty_events(batch)
                 await loop.run_in_executor(
                     None, self._record_clustering_run_sqlite, batch
                 )
@@ -804,7 +915,15 @@ class TopicClustererService:
 
         window_hours = self._config.clustering.window_hours
         bucket_ids = self._make_time_buckets(timestamps, window_hours)
-        labels, probs, strategy = self._cluster_by_bucket(embeddings, bucket_ids)
+        labels, probs, strategy, topic_metadata, metrics = self._cluster_by_bucket(
+            embeddings,
+            bucket_ids,
+            event_ids,
+            channels,
+            message_ids,
+            [r[3] for r in rows],
+            timestamps,
+        )
 
         now_dt = datetime.now(timezone.utc)
         algo_version = f"{strategy}_v{self._config.model.version}"
@@ -816,19 +935,34 @@ class TopicClustererService:
         n_noise = int((labels == -1).sum())
         window_start = min(timestamps) if timestamps else None
         window_end = max(timestamps) if timestamps else None
+        dataset_version = self._config.clustering.dataset_version
+        if dataset_version is None and window_start is not None and window_end is not None:
+            dataset_version = f"{window_start.date()}_{window_end.date()}"
         config_json = {
             "min_cluster_size": self._config.clustering.min_cluster_size,
             "min_samples": self._config.clustering.min_samples,
             "trigger_min_messages": self._config.clustering.trigger_min_messages,
             "n_neighbors": self._config.clustering.n_neighbors,
             "min_dist": self._config.clustering.min_dist,
+            "n_components": self._config.clustering.n_components
+            or self._config.clustering.umap_n_components,
+            "umap_n_components": self._config.clustering.umap_n_components,
+            "top_n_words": self._config.clustering.top_n_words,
+            "ngram_range": list(self._config.clustering.ngram_range),
+            "nr_topics": self._config.clustering.nr_topics,
+            "min_topic_size": self._config.clustering.min_topic_size,
+            "seed": self._config.clustering.seed,
             "window_hours": window_hours,
             "strategy": strategy,
-            "embedding_model": self._config.model.sbert_model,
+            "model_version": self._config.model.version,
+            "embedding_model": self._embedding_model_name(),
+            "dataset_version": dataset_version,
             "multilingual": True,
             "languages": sorted({lang for lang in languages if lang}),
             "analysis_modes": sorted({mode for mode in analysis_modes if mode}),
         }
+        config_json["config_hash"] = config_hash(config_json)
+        config_json["metrics"] = metrics
 
         assignments: list[dict[str, Any]] = []
         for i, event_id in enumerate(event_ids):
@@ -858,6 +992,7 @@ class TopicClustererService:
             config_json=config_json,
             duration_seconds=duration,
             assignments=assignments,
+            topic_metadata=topic_metadata,
         )
 
     @staticmethod
@@ -873,6 +1008,22 @@ class TopicClustererService:
 
         event_ids = [assignment["event_id"] for assignment in batch.assignments]
         async with self._pool.acquire() as conn:
+            has_run_metadata_columns = await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'cluster_runs_pg'
+                      AND column_name = 'config_hash'
+                );
+                """
+            )
+            has_topic_metadata_table = await conn.fetchval(
+                "SELECT to_regclass('public.topic_cluster_metadata') IS NOT NULL;"
+            )
+            has_topic_novelty_tables = await conn.fetchval(
+                "SELECT to_regclass('public.topic_novelty_scores') IS NOT NULL;"
+            )
             async with conn.transaction():
                 await conn.execute(
                     INSERT_CLUSTER_RUN_PG_SQL,
@@ -888,6 +1039,28 @@ class TopicClustererService:
                     json.dumps(batch.config_json),
                     batch.duration_seconds,
                 )
+                if has_run_metadata_columns:
+                    await conn.execute(
+                        """
+                        UPDATE cluster_runs_pg
+                        SET model_version = $2,
+                            config_hash = $3,
+                            dataset_version = $4,
+                            embedding_model = $5,
+                            metrics_json = $6::jsonb
+                        WHERE run_id = $1;
+                        """,
+                        batch.run_id,
+                        batch.config_json.get("model_version"),
+                        batch.config_json.get("config_hash"),
+                        batch.config_json.get("dataset_version"),
+                        batch.config_json.get("embedding_model"),
+                        json.dumps(batch.config_json.get("metrics", {})),
+                    )
+                else:
+                    logger.warning(
+                        "cluster_runs_pg BERTopic metadata columns are not migrated; keeping data in config_json"
+                    )
 
                 refs_rows = await conn.fetch(SELECT_CLUSTER_ASSIGNMENT_REFS_SQL, event_ids)
                 refs = {row["event_id"]: row for row in refs_rows}
@@ -925,6 +1098,302 @@ class TopicClustererService:
                         for assignment in batch.assignments
                     ],
                 )
+                if has_topic_metadata_table:
+                    await self._persist_topic_metadata_pg(conn, batch)
+                else:
+                    logger.warning(
+                        "topic_cluster_metadata table is not migrated; skipping explainability metadata"
+                    )
+                if has_topic_metadata_table and has_topic_novelty_tables:
+                    await self._score_topic_novelty_pg(conn, batch)
+                elif not has_topic_novelty_tables:
+                    logger.warning(
+                        "topic novelty tables are not migrated; skipping novelty scoring"
+                    )
+
+    async def _persist_topic_metadata_pg(
+        self,
+        conn: asyncpg.Connection,
+        batch: ClusteringRunBatch,
+    ) -> None:
+        assignments_by_cluster: dict[int, list[dict[str, Any]]] = {}
+        for assignment in batch.assignments:
+            if assignment["cluster_id"] >= 0:
+                assignments_by_cluster.setdefault(assignment["cluster_id"], []).append(assignment)
+        top_entities_by_cluster = await self._load_top_entities_for_run(conn, batch.run_id)
+
+        for cluster_id, topic_meta in batch.topic_metadata.items():
+            public_cluster_id = f"{batch.run_id}:{cluster_id}"
+            metadata_json = {
+                "model_version": self._config.model.version,
+                "config_hash": batch.config_json.get("config_hash"),
+                "dataset_version": batch.config_json.get("dataset_version"),
+                "embedding_model": batch.config_json.get("embedding_model"),
+                "metrics": batch.config_json.get("metrics", {}),
+                "run_id": batch.run_id,
+                "created_at": batch.run_timestamp.isoformat(),
+                "message_count": len(assignments_by_cluster.get(cluster_id, [])),
+                "config": batch.config_json,
+            }
+            await conn.execute(
+                INSERT_TOPIC_CLUSTER_METADATA_PG_SQL,
+                public_cluster_id,
+                batch.run_id,
+                cluster_id,
+                json.dumps(topic_meta.centroid),
+                json.dumps(topic_meta.keywords, ensure_ascii=False),
+                json.dumps(topic_meta.representative_messages, ensure_ascii=False),
+                json.dumps(top_entities_by_cluster.get(cluster_id, []), ensure_ascii=False),
+                json.dumps(topic_meta.top_channels, ensure_ascii=False),
+                json.dumps(topic_meta.time_distribution, ensure_ascii=False),
+                topic_meta.confidence_score,
+                topic_meta.stability_score,
+                json.dumps(metadata_json, ensure_ascii=False),
+            )
+
+    async def _load_top_entities_for_run(
+        self,
+        conn: asyncpg.Connection,
+        run_id: str,
+    ) -> dict[int, list[dict[str, Any]]]:
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    ca.cluster_id,
+                    lower(COALESCE(nr.normalized_text, nr.entity_text)) AS entity_key,
+                    COALESCE(max(nr.normalized_text), min(nr.entity_text)) AS entity_text,
+                    nr.entity_type,
+                    count(*) AS mention_count
+                FROM cluster_assignments ca
+                JOIN ner_results nr ON nr.event_id = ca.event_id
+                WHERE ca.run_id = $1
+                  AND ca.cluster_id >= 0
+                GROUP BY
+                    ca.cluster_id,
+                    lower(COALESCE(nr.normalized_text, nr.entity_text)),
+                    nr.entity_type
+                ORDER BY ca.cluster_id, mention_count DESC, entity_text ASC;
+                """,
+                run_id,
+            )
+        except (
+            asyncpg.exceptions.UndefinedTableError,
+            asyncpg.exceptions.UndefinedColumnError,
+        ):
+            return {}
+
+        grouped: dict[int, list[dict[str, Any]]] = {}
+        for row in rows:
+            cluster_id = int(row["cluster_id"])
+            if len(grouped.setdefault(cluster_id, [])) >= 10:
+                continue
+            grouped[cluster_id].append(
+                {
+                    "id": f"{row['entity_type']}:{row['entity_key']}",
+                    "text": row["entity_text"],
+                    "type": row["entity_type"],
+                    "mention_count": int(row["mention_count"] or 0),
+                }
+            )
+        return grouped
+
+    async def _score_topic_novelty_pg(
+        self,
+        conn: asyncpg.Connection,
+        batch: ClusteringRunBatch,
+    ) -> None:
+        stats_rows = await conn.fetch(
+            """
+            SELECT
+                ca.cluster_id,
+                ca.public_cluster_id,
+                min(rm.message_date) AS first_seen,
+                max(rm.message_date) AS last_seen,
+                count(*) AS message_count,
+                count(DISTINCT rm.channel) AS channel_count,
+                COALESCE(avg(
+                    CASE
+                        WHEN sr.positive_prob IS NOT NULL OR sr.negative_prob IS NOT NULL
+                            THEN COALESCE(sr.positive_prob, 0) - COALESCE(sr.negative_prob, 0)
+                        WHEN lower(COALESCE(sr.sentiment_label, 'neutral')) = 'positive'
+                            THEN COALESCE(sr.sentiment_score, 0)
+                        WHEN lower(COALESCE(sr.sentiment_label, 'neutral')) = 'negative'
+                            THEN -COALESCE(sr.sentiment_score, 0)
+                        ELSE 0
+                    END
+                ), 0) AS avg_sentiment
+            FROM cluster_assignments ca
+            JOIN raw_messages rm ON rm.event_id = ca.event_id
+            LEFT JOIN sentiment_results sr ON sr.event_id = ca.event_id
+            WHERE ca.run_id = $1
+              AND ca.cluster_id >= 0
+            GROUP BY ca.cluster_id, ca.public_cluster_id;
+            """,
+            batch.run_id,
+        )
+        stats_by_cluster = {int(row["cluster_id"]): row for row in stats_rows}
+        top_entities_by_cluster = await self._load_top_entities_for_run(conn, batch.run_id)
+        history_rows = await conn.fetch(
+            """
+            SELECT
+                public_cluster_id,
+                run_id,
+                cluster_id,
+                first_seen,
+                last_seen,
+                message_count,
+                avg_sentiment,
+                centroid_json,
+                keywords_json,
+                entities_json,
+                channels_json
+            FROM topic_history
+            WHERE run_id <> $1
+            ORDER BY last_seen DESC NULLS LAST
+            LIMIT 500;
+            """,
+            batch.run_id,
+        )
+        history = [self._snapshot_from_history_row(row) for row in history_rows]
+
+        for cluster_id, topic_meta in batch.topic_metadata.items():
+            stat = stats_by_cluster.get(cluster_id)
+            if stat is None:
+                continue
+            public_cluster_id = stat["public_cluster_id"]
+            current = TopicSnapshot(
+                public_cluster_id=public_cluster_id,
+                run_id=batch.run_id,
+                cluster_id=cluster_id,
+                centroid=list(topic_meta.centroid or []),
+                keywords=list(topic_meta.keywords or []),
+                entities=weighted_counts(
+                    top_entities_by_cluster.get(cluster_id, []),
+                    "id",
+                    "mention_count",
+                ),
+                channels=weighted_counts(list(topic_meta.top_channels or []), "channel", "count"),
+                message_count=int(stat["message_count"] or 0),
+                first_seen=stat["first_seen"],
+                last_seen=stat["last_seen"],
+                avg_sentiment=float(stat["avg_sentiment"] or 0),
+            )
+            await conn.execute(
+                UPSERT_TOPIC_HISTORY_SQL,
+                current.public_cluster_id,
+                current.run_id,
+                current.cluster_id,
+                current.first_seen,
+                current.last_seen,
+                current.message_count,
+                int(stat["channel_count"] or 0),
+                current.avg_sentiment,
+                json.dumps(current.centroid),
+                json.dumps(current.keywords, ensure_ascii=False),
+                json.dumps(current.entities, ensure_ascii=False),
+                json.dumps(current.channels, ensure_ascii=False),
+                json.dumps(
+                    {
+                        "model_version": self._config.model.version,
+                        "embedding_model": batch.config_json.get("embedding_model"),
+                        "config_hash": batch.config_json.get("config_hash"),
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+            result = calculate_topic_novelty(current, history)
+            await conn.execute(
+                INSERT_TOPIC_NOVELTY_SCORE_SQL,
+                result.public_cluster_id,
+                current.run_id,
+                result.novelty_score,
+                result.status,
+                result.nearest_topic_id,
+                json.dumps(result.features, ensure_ascii=False),
+                json.dumps(result.explanation, ensure_ascii=False),
+                NOVELTY_ALGO_VERSION,
+            )
+            await conn.execute(
+                INSERT_TOPIC_LIFECYCLE_EVENT_SQL,
+                result.public_cluster_id,
+                current.run_id,
+                result.status,
+                result.nearest_topic_id,
+                result.novelty_score,
+                json.dumps(
+                    {
+                        "features": result.features,
+                        "explanation": result.explanation,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+            for link in result.similarity_links:
+                await conn.execute(
+                    UPSERT_TOPIC_SIMILARITY_LINK_SQL,
+                    result.public_cluster_id,
+                    link["topic_id"],
+                    current.run_id,
+                    link["semantic_similarity"],
+                    link["entity_overlap"],
+                    link["channel_overlap"],
+                    link["keyword_overlap"],
+                    link["overall_similarity"],
+                    json.dumps(link, ensure_ascii=False),
+                )
+            logger.info(
+                "topic novelty scored cluster=%s score=%.3f status=%s nearest=%s",
+                result.public_cluster_id,
+                result.novelty_score,
+                result.status,
+                result.nearest_topic_id,
+            )
+
+    def _snapshot_from_history_row(self, row: asyncpg.Record) -> TopicSnapshot:
+        return TopicSnapshot(
+            public_cluster_id=row["public_cluster_id"],
+            run_id=row["run_id"],
+            cluster_id=int(row["cluster_id"]),
+            centroid=self._json_list(row["centroid_json"]),
+            keywords=[str(item) for item in self._json_list(row["keywords_json"])],
+            entities=self._json_float_dict(row["entities_json"]),
+            channels=self._json_float_dict(row["channels_json"]),
+            message_count=int(row["message_count"] or 0),
+            first_seen=row["first_seen"],
+            last_seen=row["last_seen"],
+            avg_sentiment=float(row["avg_sentiment"] or 0),
+        )
+
+    @staticmethod
+    def _json_list(value: Any) -> list[Any]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return []
+        return value if isinstance(value, list) else []
+
+    @staticmethod
+    def _json_float_dict(value: Any) -> dict[str, float]:
+        if value is None:
+            return {}
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return {}
+        if not isinstance(value, dict):
+            return {}
+        result: dict[str, float] = {}
+        for key, raw in value.items():
+            try:
+                result[str(key)] = float(raw)
+            except (TypeError, ValueError):
+                continue
+        return result
 
     async def _publish_assignment_events(self, batch: ClusteringRunBatch) -> None:
         if self._producer is None:
@@ -937,6 +1406,56 @@ class TopicClustererService:
                 self._config.kafka.output_topic,
                 json.dumps(event).encode("utf-8"),
                 key=assignment["event_id"].encode("utf-8"),
+            )
+
+    async def _publish_novelty_events(self, batch: ClusteringRunBatch) -> None:
+        if self._producer is None or self._pool is None:
+            return
+        async with self._pool.acquire() as conn:
+            try:
+                rows = await conn.fetch(
+                    """
+                    SELECT
+                        public_cluster_id,
+                        novelty_score,
+                        novelty_status,
+                        nearest_topic_id,
+                        features_json,
+                        explanation_json,
+                        calculated_at
+                    FROM topic_novelty_scores_latest
+                    WHERE run_id = $1
+                      AND novelty_status = 'new'
+                    ORDER BY novelty_score DESC;
+                    """,
+                    batch.run_id,
+                )
+            except (
+                asyncpg.exceptions.UndefinedTableError,
+                asyncpg.exceptions.UndefinedColumnError,
+            ):
+                return
+        for row in rows:
+            payload = {
+                "event_id": f"topic_novelty:{row['public_cluster_id']}",
+                "event_type": "topic_novelty_detected",
+                "event_timestamp": _dt_iso(row["calculated_at"]),
+                "event_version": self._config.event_version,
+                "source_system": self._config.source_system,
+                "payload": {
+                    "public_cluster_id": row["public_cluster_id"],
+                    "run_id": batch.run_id,
+                    "novelty_score": float(row["novelty_score"] or 0),
+                    "novelty_status": row["novelty_status"],
+                    "nearest_topic_id": row["nearest_topic_id"],
+                    "features": row["features_json"] or {},
+                    "explanation": row["explanation_json"] or {},
+                },
+            }
+            await self._producer.send_and_wait(
+                "topic.novelty.candidates",
+                json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                key=str(row["public_cluster_id"]).encode("utf-8"),
             )
 
     def _build_topic_assignment_event(
@@ -975,7 +1494,7 @@ class TopicClustererService:
                     float(assignment["cluster_probability"]), 6
                 ),
                 "model": {
-                    "name": self._config.model.sbert_model,
+                    "name": self._embedding_model_name(),
                     "version": self._config.model.version,
                     "framework": "sentence-transformers",
                 },
@@ -1079,11 +1598,20 @@ class TopicClustererService:
         return buckets
 
     def _cluster_by_bucket(
-        self, embeddings: np.ndarray, bucket_ids: list[str]
-    ) -> tuple[np.ndarray, np.ndarray, str]:
+        self,
+        embeddings: np.ndarray,
+        bucket_ids: list[str],
+        event_ids: list[str],
+        channels: list[str],
+        message_ids: list[int],
+        texts: list[str],
+        timestamps: list[datetime],
+    ) -> tuple[np.ndarray, np.ndarray, str, dict[int, Any], dict[str, Any]]:
         labels = np.full(len(embeddings), -1, dtype=int)
         probs = np.zeros(len(embeddings), dtype=float)
         strategy = "umap_hdbscan"
+        metadata: dict[int, Any] = {}
+        metric_parts: list[dict[str, Any]] = []
 
         unique_buckets: dict[str, list[int]] = {}
         for i, bid in enumerate(bucket_ids):
@@ -1091,81 +1619,66 @@ class TopicClustererService:
 
         cluster_offset = 0
         cfg = self._config.clustering
+        pipeline = TopicModelingPipeline(
+            reducer=DimensionalityReducer(
+                n_neighbors=cfg.n_neighbors,
+                n_components=cfg.n_components or cfg.umap_n_components,
+                min_dist=cfg.min_dist,
+                seed=cfg.seed,
+            ),
+            clusterer=Clusterer(
+                min_cluster_size=cfg.min_cluster_size,
+                min_samples=cfg.min_samples,
+                fallback_similarity_threshold=cfg.fallback_similarity_threshold,
+                min_topic_size=cfg.min_topic_size,
+            ),
+            representer=TopicRepresenter(
+                top_n_words=cfg.top_n_words,
+                ngram_range=cfg.ngram_range,
+            ),
+            outlier_handler=OutlierHandler(),
+            topic_merger=TopicMerger(cfg.nr_topics),
+        )
 
         for bucket_id, idx_list in unique_buckets.items():
             idx = np.array(idx_list)
-            if len(idx) < cfg.min_cluster_size:
-                fallback_labels, fallback_probs = self._fallback_cluster_bucket(
-                    embeddings[idx]
+            items = [
+                CorpusItem(
+                    event_id=event_ids[i],
+                    channel=channels[i],
+                    message_id=message_ids[i],
+                    text=texts[i] or "",
+                    embedding=embeddings[i],
+                    timestamp=timestamps[i],
+                    bucket_id=bucket_ids[i],
                 )
-                labels[idx] = fallback_labels + cluster_offset
-                probs[idx] = fallback_probs
-                cluster_offset += len(set(fallback_labels))
-                strategy = "similarity_fallback"
-                continue
+                for i in idx.tolist()
+            ]
+            result = pipeline.run(items)
+            bucket_labels = result.labels
+            bucket_probs = result.probabilities
+            metric_parts.append(result.metrics)
+            if result.strategy != "umap_hdbscan":
+                strategy = result.strategy if strategy == "umap_hdbscan" else "mixed"
 
-            n_neighbors = min(cfg.n_neighbors, len(idx) - 1)
-            if n_neighbors < 2:
-                fallback_labels, fallback_probs = self._fallback_cluster_bucket(
-                    embeddings[idx]
-                )
-                labels[idx] = fallback_labels + cluster_offset
-                probs[idx] = fallback_probs
-                cluster_offset += len(set(fallback_labels))
-                strategy = "similarity_fallback"
-                continue
-
-            umap_model = umap.UMAP(
-                n_components=min(cfg.umap_n_components, len(idx) - 2),
-                metric="cosine",
-                n_neighbors=n_neighbors,
-                min_dist=cfg.min_dist,
-                random_state=42,
-            )
-            reduced = umap_model.fit_transform(embeddings[idx])
-
-            hdb = hdbscan.HDBSCAN(
-                min_cluster_size=cfg.min_cluster_size,
-                min_samples=cfg.min_samples,
-                cluster_selection_method="leaf",
-                allow_single_cluster=False,
-                prediction_data=True,
-            )
-            hdb.fit(reduced)
-
-            bucket_labels = hdb.labels_
-            bucket_probs = hdb.probabilities_
-            n_clusters = len(set(bucket_labels)) - (
-                1 if -1 in set(bucket_labels) else 0
-            )
-            if n_clusters <= 0:
-                fallback_labels, fallback_probs = self._fallback_cluster_bucket(
-                    embeddings[idx]
-                )
-                labels[idx] = fallback_labels + cluster_offset
-                probs[idx] = fallback_probs
-                cluster_offset += len(set(fallback_labels))
-                strategy = "similarity_fallback"
-                continue
-
-            mapped = np.where(
-                bucket_labels == -1, -1, bucket_labels + cluster_offset
-            )
-            cluster_offset += n_clusters
+            mapped = np.where(bucket_labels == -1, -1, bucket_labels + cluster_offset)
             labels[idx] = mapped
             probs[idx] = bucket_probs
 
-            noise_positions = np.where(bucket_labels == -1)[0]
-            if noise_positions.size > 0:
-                fallback_labels, fallback_probs = self._fallback_cluster_bucket(
-                    embeddings[idx][noise_positions]
-                )
-                labels[idx[noise_positions]] = fallback_labels + cluster_offset
-                probs[idx[noise_positions]] = fallback_probs
-                cluster_offset += len(set(fallback_labels))
-                strategy = "mixed"
+            for local_label, topic_meta in result.topic_metadata.items():
+                public_label = int(local_label + cluster_offset)
+                metadata[public_label] = topic_meta
+            cluster_offset += len(
+                {int(v) for v in bucket_labels.tolist() if int(v) >= 0}
+            )
 
-        return labels, probs, strategy
+        metrics = {
+            "mean_probability": round(float(np.mean(probs)) if len(probs) else 0.0, 6),
+            "noise_ratio": round(float((labels == -1).sum() / max(1, len(labels))), 6),
+            "bucket_count": len(unique_buckets),
+            "bucket_metrics": metric_parts,
+        }
+        return labels, probs, strategy, metadata, metrics
 
     def _fallback_cluster_bucket(
         self,

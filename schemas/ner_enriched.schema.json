@@ -76,12 +76,13 @@
               },
               "type": {
                 "type": "string",
-                "description": "Entity type (NER class)",
+                "description": "Entity type (NER class). Core: PERSON/ORG/LOC/MISC (union of Natasha + dslim). Extended types from future models may be added.",
                 "enum": [
                   "PERSON",
                   "ORG",
-                  "GPE",
                   "LOC",
+                  "MISC",
+                  "GPE",
                   "PRODUCT",
                   "EVENT",
                   "DATE",
@@ -124,6 +125,15 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "canonical_id": {
+                "type": ["string", "null"],
+                "format": "uuid",
+                "description": "UUID of the canonical entity record in entity_canonical table"
+              },
+              "canonical_name": {
+                "type": ["string", "null"],
+                "description": "Preferred display name of the canonical entity"
               },
               "metadata": {
                 "type": "object",
@@ -198,8 +208,8 @@
           "properties": {
             "name": {
               "type": "string",
-              "description": "Model name",
-              "examples": ["deeppavlov-ner-ru", "spacy-ru-core"]
+              "description": "Model name / HuggingFace ID",
+              "examples": ["natasha", "dslim/bert-base-NER"]
             },
             "version": {
               "type": "string",
@@ -207,7 +217,18 @@
             },
             "framework": {
               "type": "string",
-              "description": "ML framework"
+              "description": "ML framework",
+              "examples": ["natasha", "transformers"]
+            },
+            "backend": {
+              "type": "string",
+              "description": "Backend identifier: 'natasha' (RU) or HF model id (EN)",
+              "examples": ["natasha", "dslim/bert-base-NER"]
+            },
+            "language": {
+              "type": "string",
+              "description": "Language the backend was invoked for",
+              "examples": ["ru", "en"]
             }
           }
         },

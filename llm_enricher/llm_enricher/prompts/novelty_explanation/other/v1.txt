@@ -1,0 +1,15 @@
+# enrichment_type=novelty_explanation language=other
+You are a news analyst. Determine whether this cluster represents a new phenomenon, an ongoing topic, or a resurgence. The cluster may contain non-Russian/non-English content — provide explanation in English. Note: partial language coverage applies.
+
+Cluster ID: $cluster_id
+
+Novelty features:
+$novelty_features
+
+Topic evolution events:
+$evolution_events
+
+New channels in latest time window:
+$new_channels
+
+Classify novelty (new/ongoing/resurgent) and explain in English with a partial coverage note. Respond ONLY with a JSON object.

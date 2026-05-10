@@ -4,23 +4,33 @@ import asyncio
 import itertools
 import json
 import logging
-import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import List, Optional, Tuple
 from uuid import UUID
 
 import asyncpg
-import pymorphy2
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.structs import OffsetAndMetadata, TopicPartition
 from aiohttp import web
-from natasha import Doc, NewsEmbedding, NewsNERTagger, Segmenter
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
+from ner_extractor.backends import Entity, NatashaRuBackend, TransformersEnBackend
 from ner_extractor.config import AppConfig
+from ner_extractor.providers import (
+    NatashaProvider,
+    ProviderChain,
+    RuleBasedAliasProvider,
+    TransformerNERProvider,
+)
+from ner_extractor.resolver import (
+    CanonicalResolver,
+    ResolvedEntity,
+    ResolverConfig,
+    load_rules_from_db,
+)
 from ner_extractor.metrics import (
     ENTITIES_EXTRACTED,
     MESSAGES_CONSUMED,
@@ -33,8 +43,6 @@ from ner_extractor.utils import decode_kafka_key, parse_iso_datetime, utc_now_is
 
 
 logger = logging.getLogger("ner_extractor")
-
-NATASHA_TYPE_MAP = {"PER": "PERSON", "ORG": "ORG", "LOC": "LOC"}
 
 INSERT_PROCESSED_EVENT_SQL = """
 INSERT INTO processed_events (event_id, event_type, event_timestamp, consumer_id, status)
@@ -91,13 +99,30 @@ INSERT INTO ner_results (
     model_version,
     event_timestamp,
     trace_id,
-    extracted_at
+    extracted_at,
+    model_backend,
+    model_language,
+    entity_canonical_id
 )
 VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9,
-    $10, $11, $12, $13, $14, $15, $16, $17, $18
+    $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
 )
 RETURNING id;
+"""
+
+INSERT_NER_MODEL_RUN_SQL = """
+INSERT INTO ner_model_runs (
+    preprocessed_message_id,
+    provider_name,
+    provider_version,
+    language,
+    entity_count,
+    latency_ms,
+    success,
+    error
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
 """
 
 INSERT_ENTITY_RELATION_SQL = """
@@ -148,7 +173,8 @@ class EntitySpan:
     entity_type: str
     start: int
     end: int
-    normalized: Optional[str]
+    normalized: Optional[str] = None
+    confidence: float = 1.0
 
 
 @dataclass
@@ -197,23 +223,73 @@ class NerExtractorService:
         self._web_runner: Optional[web.AppRunner] = None
         self._health_site: Optional[web.TCPSite] = None
         self._metrics_site: Optional[web.TCPSite] = None
+        self._listen_task: Optional[asyncio.Task] = None
 
+        # ── NER provider chain ─────────────────────────────────────────
+        ru_cfg = config.models.ru
         logger.info("loading natasha NER models")
-        self._segmenter = Segmenter()
-        emb = NewsEmbedding()
-        self._ner_tagger = NewsNERTagger(emb)
-        self._morph = pymorphy2.MorphAnalyzer()
+        natasha_provider = NatashaProvider(
+            version=ru_cfg.version,
+            min_entity_length=ru_cfg.min_entity_length,
+        )
         logger.info("natasha NER models loaded")
+
+        en_cfg = config.models.en
+        providers = [natasha_provider]
+        if en_cfg.enabled:
+            providers.append(
+                TransformerNERProvider(
+                    name=en_cfg.name,
+                    version=en_cfg.version,
+                    device=en_cfg.device,
+                    batch_size=en_cfg.batch_size,
+                    min_entity_length=en_cfg.min_entity_length,
+                    confidence_threshold=en_cfg.confidence_threshold,
+                    cache_dir=en_cfg.cache_dir,
+                )
+            )
+            logger.info("EN NER provider configured model=%s (lazy load)", en_cfg.name)
+
+        canonical_cfg = config.canonical
+        if canonical_cfg.enable_llm_ner:
+            from ner_extractor.providers.llm import LLMNERProvider
+            providers.append(LLMNERProvider())
+
+        self._provider_chain = ProviderChain(providers)
+
+        # Keep legacy backend refs for backward-compat (e.g. tests that mock them)
+        self._ru_backend = natasha_provider._backend
+        self._en_backend = providers[1]._backend if en_cfg.enabled else None
+
+        # ── canonical resolver ─────────────────────────────────────────
+        self._resolver = CanonicalResolver(
+            ResolverConfig(
+                enable_canonical_resolution=canonical_cfg.enable_canonical_resolution,
+                enable_embedding_match=canonical_cfg.enable_embedding_match,
+                fuzzy_threshold=canonical_cfg.fuzzy_threshold,
+                auto_create_threshold=canonical_cfg.auto_create_threshold,
+                link_threshold=canonical_cfg.link_threshold,
+                cache_size=canonical_cfg.resolver_cache_size,
+            )
+        )
 
     async def start(self) -> None:
         await self._start_db()
+        await self._load_initial_rules()
         await self._start_kafka()
         await self._start_http()
+        self._listen_task = asyncio.create_task(self._listen_invalidate())
         self._health.ready = True
         logger.info("service started")
 
     async def stop(self) -> None:
         self._health.ready = False
+        if self._listen_task is not None:
+            self._listen_task.cancel()
+            try:
+                await self._listen_task
+            except asyncio.CancelledError:
+                pass
         if self._consumer is not None:
             await self._consumer.stop()
         if self._producer is not None:
@@ -538,38 +614,80 @@ class NerExtractorService:
                     MESSAGES_PROCESSED.labels(status="skipped_unsupported").inc()
                     return ProcessingOutcome.SUCCESS
 
-                entities = self._extract_entities(context.original_text)
+                loop = asyncio.get_event_loop()
+                entities, run_metrics_list = await loop.run_in_executor(
+                    None,
+                    self._provider_chain.extract_with_metrics,
+                    context.original_text,
+                    context.original_language,
+                )
+
                 await conn.execute(DELETE_ENTITY_RELATIONS_SQL, preprocessed_id)
                 await conn.execute(DELETE_NER_RESULTS_SQL, preprocessed_id)
                 processing_time_ms = (
                     time.monotonic() - processing_started
                 ) * 1000.0
 
-                for ent in entities:
-                    await conn.fetchval(
-                        INSERT_NER_RESULT_SQL,
+                # Write per-provider run metrics
+                for metrics in run_metrics_list:
+                    await conn.execute(
+                        INSERT_NER_MODEL_RUN_SQL,
                         preprocessed_id,
-                        context.message_id,
-                        context.channel,
-                        context.event_id,
-                        ent.text,
-                        ent.entity_type,
-                        ent.start,
-                        ent.end,
-                        self._config.model.confidence,
-                        ent.normalized,
-                        None,
-                        [],
-                        json.dumps({"source": "natasha"}),
-                        "natasha",
-                        self._config.model.version,
-                        now_dt,
-                        context.trace_id_uuid,
-                        now_dt,
+                        metrics.provider_name,
+                        metrics.provider_version,
+                        metrics.language,
+                        metrics.entity_count,
+                        metrics.latency_ms,
+                        metrics.success,
+                        metrics.error,
                     )
+
+                # Insert ner_results and collect row ids for resolver
+                ner_result_ids: List[str] = []
+                primary_model_name = run_metrics_list[0].provider_name if run_metrics_list else "natasha"
+                for ent in entities:
+                    row_id = await conn.fetchval(
+                        INSERT_NER_RESULT_SQL,
+                        preprocessed_id,           # $1
+                        context.message_id,        # $2
+                        context.channel,           # $3
+                        context.event_id,          # $4
+                        ent.text,                  # $5
+                        ent.entity_type,           # $6
+                        ent.start,                 # $7
+                        ent.end,                   # $8
+                        ent.confidence,            # $9
+                        ent.normalized,            # $10
+                        None,                      # $11 wikidata_id
+                        [],                        # $12 aliases
+                        json.dumps({"source": primary_model_name}),  # $13
+                        primary_model_name,        # $14
+                        "1.0.0",                   # $15
+                        now_dt,                    # $16
+                        context.trace_id_uuid,     # $17
+                        now_dt,                    # $18
+                        primary_model_name,        # $19 model_backend
+                        context.original_language, # $20 model_language
+                        None,                      # $21 entity_canonical_id (filled after resolve)
+                    )
+                    ner_result_ids.append(str(row_id))
                     ENTITIES_EXTRACTED.labels(entity_type=ent.entity_type).inc()
 
-                relations = self._build_co_occurrence_relations(entities)
+                # Canonical resolution
+                resolved_entities = await self._resolver.resolve_many(
+                    conn, entities, ner_result_ids, context.original_language
+                )
+
+                # Back-fill canonical_id on ner_results rows
+                for res, rid in zip(resolved_entities, ner_result_ids):
+                    if res.canonical_id:
+                        await conn.execute(
+                            "UPDATE ner_results SET entity_canonical_id = $1 WHERE id = $2",
+                            UUID(res.canonical_id),
+                            UUID(rid),
+                        )
+
+                relations = self._build_co_occurrence_relations(resolved_entities)
                 for subj, obj_, subj_type, obj_type in relations:
                     await conn.fetchval(
                         INSERT_ENTITY_RELATION_SQL,
@@ -587,7 +705,7 @@ class NerExtractorService:
                     )
 
         enriched_event = self._build_enriched_event(
-            context, entities, relations, now_iso, processing_time_ms
+            context, resolved_entities, relations, run_metrics_list, now_iso, processing_time_ms
         )
         try:
             self._output_validator.validate(enriched_event)
@@ -623,132 +741,71 @@ class NerExtractorService:
         )
         return row is not None
 
-    # ── NER inference ───────────────────────────────────────────────
+    # ── rules / LISTEN/NOTIFY ────────────────────────────────────────
 
-    def _extract_entities(self, text: str) -> list[EntitySpan]:
-        if not text or not text.strip():
-            return []
+    async def _load_initial_rules(self) -> None:
+        if self._pool is None:
+            return
+        async with self._pool.acquire() as conn:
+            rules = await load_rules_from_db(conn)
+            self._resolver.update_rules(rules)
+        logger.info("loaded %d normalization rules", len(rules) if 'rules' in dir() else 0)
 
-        doc = Doc(text)
-        doc.segment(self._segmenter)
-        doc.tag_ner(self._ner_tagger)
+    async def _listen_invalidate(self) -> None:
+        """Background task: LISTEN entity_resolver_invalidate and reload rules on NOTIFY."""
+        if self._pool is None:
+            return
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.add_listener("entity_resolver_invalidate", self._on_invalidate)
+                while not self._stop_event.is_set():
+                    await asyncio.sleep(1)
+                await conn.remove_listener("entity_resolver_invalidate", self._on_invalidate)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("LISTEN entity_resolver_invalidate failed")
 
-        entities: list[EntitySpan] = []
-        seen: set[tuple[str, int, int]] = set()
-        for span in doc.spans:
-            if span.type not in NATASHA_TYPE_MAP:
-                continue
-            normalized = self._normalize_entity(span.text)
-            if len(normalized) < self._config.model.min_entity_length:
-                continue
-            if normalized.isnumeric():
-                continue
-            dedup_key = (normalized.lower(), span.start, span.stop)
-            if dedup_key in seen:
-                continue
-            seen.add(dedup_key)
+    def _on_invalidate(self, conn, pid, channel, payload) -> None:
+        self._resolver.invalidate_cache()
+        asyncio.create_task(self._load_initial_rules())
+        logger.info("resolver cache invalidated payload=%s", payload)
 
-            mapped_type = NATASHA_TYPE_MAP[span.type]
-            canonical = self._canonicalize(normalized, span.type)
-
-            entities.append(
-                EntitySpan(
-                    text=span.text,
-                    entity_type=mapped_type,
-                    start=span.start,
-                    end=span.stop,
-                    normalized=canonical,
-                )
-            )
-        return entities
-
-    def _normalize_entity(self, text: str) -> str:
-        text = re.sub(r"\s+", " ", text).strip()
-        text = re.sub(r"[\"'«»]", "", text)
-        text = re.sub(r"[\(\)\[\]{}]", "", text)
-        text = re.sub(r"[‐‑‒–—−]", "-", text)
-        text = re.sub(r"\s*-\s*", "-", text)
-        if text.isupper():
-            text = text.title()
-        return text.strip()
-
-    def _canonicalize(self, text: str, natasha_type: str) -> str:
-        if natasha_type == "PER":
-            return self._canonicalize_person(text)
-        tokens = text.split()
-        lemmas = []
-        for tok in tokens:
-            if not re.search(r"[A-Za-zА-Яа-яЁё]", tok):
-                continue
-            if tok.isupper() and len(tok) <= 5:
-                lemmas.append(tok)
-            else:
-                parsed = self._morph.parse(tok)
-                lemmas.append(parsed[0].normal_form)
-        if not lemmas:
-            return text
-        return " ".join(w if w.isupper() else w.title() for w in lemmas)
-
-    def _canonicalize_person(self, text: str) -> str:
-        tokens = text.split()
-        tokens = [t for t in tokens if re.search(r"[A-Za-zА-Яа-яЁё]", t)]
-        if not tokens:
-            return text
-        parsed_tokens = []
-        for tok in tokens:
-            parses = self._morph.parse(tok)
-            best = parses[0]
-            role = None
-            lemma = best.normal_form
-            for p in parses:
-                if "Surn" in p.tag:
-                    role = "Surn"
-                    lemma = p.normal_form
-                    break
-                if "Name" in p.tag and role is None:
-                    role = "Name"
-                    lemma = p.normal_form
-                if "Patr" in p.tag and role is None:
-                    role = "Patr"
-                    lemma = p.normal_form
-            parsed_tokens.append({"lemma": lemma, "role": role})
-        surname = next(
-            (p["lemma"] for p in parsed_tokens if p["role"] == "Surn"), None
-        )
-        name = next(
-            (p["lemma"] for p in parsed_tokens if p["role"] == "Name"), None
-        )
-        patronymic = next(
-            (p["lemma"] for p in parsed_tokens if p["role"] == "Patr"), None
-        )
-        if surname or name:
-            ordered = [w for w in [surname, name, patronymic] if w]
-            return " ".join(w.title() for w in ordered)
-        return " ".join(p["lemma"].title() for p in parsed_tokens)
+    # ── co-occurrence relations ─────────────────────────────────────
 
     @staticmethod
     def _build_co_occurrence_relations(
-        entities: list[EntitySpan],
-    ) -> list[tuple[str, str, str, str]]:
-        if len(entities) < 2:
+        resolved_entities: List[ResolvedEntity],
+    ) -> List[Tuple[str, str, str, str]]:
+        if len(resolved_entities) < 2:
             return []
-        relations: list[tuple[str, str, str, str]] = []
-        seen: set[tuple[str, str]] = set()
-        for a, b in itertools.combinations(entities, 2):
-            norm_a = (a.normalized or a.text).lower()
-            norm_b = (b.normalized or b.text).lower()
-            if norm_a == norm_b:
+
+        def _entity_of(value):
+            return getattr(value, "entity", value)
+
+        def _canonical_id_of(value) -> Optional[str]:
+            return getattr(value, "canonical_id", None)
+
+        def _canonical_name_of(value) -> Optional[str]:
+            return getattr(value, "canonical_name", None)
+
+        relations: List[Tuple[str, str, str, str]] = []
+        seen = set()
+        for a, b in itertools.combinations(resolved_entities, 2):
+            entity_a = _entity_of(a)
+            entity_b = _entity_of(b)
+            # Prefer canonical_id for dedup; fall back to normalized text
+            key_a = _canonical_id_of(a) or (entity_a.normalized or entity_a.text).lower()
+            key_b = _canonical_id_of(b) or (entity_b.normalized or entity_b.text).lower()
+            if key_a == key_b:
                 continue
-            pair_key = tuple(sorted([norm_a, norm_b]))
+            pair_key = tuple(sorted([key_a, key_b]))
             if pair_key in seen:
                 continue
             seen.add(pair_key)
-            relations.append((
-                a.normalized or a.text,
-                b.normalized or b.text,
-                a.entity_type,
-                b.entity_type,
-            ))
+            name_a = _canonical_name_of(a) or entity_a.normalized or entity_a.text
+            name_b = _canonical_name_of(b) or entity_b.normalized or entity_b.text
+            relations.append((name_a, name_b, entity_a.entity_type, entity_b.entity_type))
         return relations
 
     # ── output building ─────────────────────────────────────────────
@@ -756,22 +813,27 @@ class NerExtractorService:
     def _build_enriched_event(
         self,
         context: MessageContext,
-        entities: list[EntitySpan],
-        relations: list[tuple[str, str, str, str]],
+        resolved_entities: List[ResolvedEntity],
+        relations: List[Tuple[str, str, str, str]],
+        run_metrics_list: list,
         now_iso: str,
         processing_time_ms: float,
     ) -> dict:
+        primary_metrics = run_metrics_list[0] if run_metrics_list else None
         entities_payload = [
             {
-                "text": ent.text,
-                "type": ent.entity_type,
-                "start": ent.start,
-                "end": ent.end,
-                "confidence": self._config.model.confidence,
-                "normalized": ent.normalized,
+                "text": res.entity.text,
+                "type": res.entity.entity_type,
+                "start": res.entity.start,
+                "end": res.entity.end,
+                "confidence": res.entity.confidence,
+                "normalized": res.entity.normalized,
                 "wikidata_id": None,
+                "canonical_id": res.canonical_id,
+                "canonical_name": res.canonical_name,
+                "aliases": res.aliases,
             }
-            for ent in entities
+            for res in resolved_entities
         ]
         relations_payload = [
             {
@@ -784,6 +846,13 @@ class NerExtractorService:
             }
             for subj, obj_, subj_type, obj_type in relations
         ]
+        model_info = {
+            "name": primary_metrics.provider_name if primary_metrics else "natasha",
+            "version": primary_metrics.provider_version if primary_metrics else "1.0.0",
+            "framework": "chain",
+            "backend": primary_metrics.provider_name if primary_metrics else "natasha",
+            "language": context.original_language,
+        }
         return {
             "event_id": context.event_id,
             "event_type": "ner_enriched",
@@ -796,11 +865,7 @@ class NerExtractorService:
                 "channel": context.channel,
                 "entities": entities_payload,
                 "relations": relations_payload,
-                "model": {
-                    "name": "natasha",
-                    "version": self._config.model.version,
-                    "framework": "natasha",
-                },
+                "model": model_info,
                 "extracted_at": now_iso,
                 "processing_time_ms": round(processing_time_ms, 3),
             },

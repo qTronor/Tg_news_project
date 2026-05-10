@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PaperSummarized",
+  "description": "LLM summary event emitted by paper_summarizer",
+  "type": "object",
+  "required": ["paper_id", "model_name", "prompt_version", "summarized_at"],
+  "additionalProperties": false,
+  "properties": {
+    "paper_id": {"type": "string"},
+    "model_name": {"type": "string"},
+    "prompt_version": {"type": "string"},
+    "summary_json": {"type": "object", "additionalProperties": true},
+    "short_summary": {"type": ["string", "null"]},
+    "summarized_at": {"type": "string", "format": "date-time"}
+  }
+}

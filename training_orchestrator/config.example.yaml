@@ -1,0 +1,22 @@
+service_name: training-orchestrator
+
+postgres:
+  host: localhost
+  port: 5432
+  database: telegram_news
+  user: postgres
+  password: postgres
+  min_size: 1
+  max_size: 5
+  command_timeout: 60
+
+service:
+  poll_interval_seconds: 5
+  max_jobs_per_tick: 1
+
+api:
+  host: 0.0.0.0
+  port: 8040
+
+logging:
+  level: INFO

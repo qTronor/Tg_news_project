@@ -1,172 +1,223 @@
 # Project Structure
 
-```
+Tg_news_project is a Telegram News Intelligence system. The product core is not
+just message collection: it collects Telegram news, groups messages into topics
+and storylines, explains dynamics across sources, entities and sentiment, and
+feeds human review back into quality improvements.
+
+## Product Areas
+
+### Product Core
+
+User-facing analytics for daily work:
+
+- Dashboard: high-level volume, topic, source and sentiment view.
+- Topics: topic list, novelty/importance signals and topic detail.
+- Topic detail: volume, spread, freshness, growth, sentiment, key actors,
+  first source, provenance, related topics and representative messages.
+- Feed: searchable message stream.
+- Entities: entity mentions, aliases, normalization and merge operations.
+- Graph: entity/topic/source graph exploration.
+- Sources: Telegram channel visibility and source management.
+
+### Quality Lab
+
+Human-in-the-loop quality cycle for improving topic intelligence:
+
+- Review topics: analyst decisions for uncertain, novel or low-confidence
+  topics.
+- Annotation: topic/storyline labels, confidence and quality judgments.
+- Datasets: versioned outputs from reviewed and annotated cases.
+- Topic benchmark experiments: compare topic-modeling runs on controlled
+  datasets.
+- Candidate training jobs: consent-gated training candidates, currently MVP/mock
+  where the backend says so.
+- Models / model registry: candidate history, evaluation metadata and explicit
+  deploy/rollback flow.
+
+The intended cycle is:
+
+`topic error or uncertainty -> review -> annotation/dataset -> benchmark or training candidate -> explicit deploy -> better analytics`.
+
+Training does not start without explicit user consent. A trained candidate is
+not deployed automatically. Deploying a model requires a separate explicit
+deploy action.
+
+### Experimental / Research
+
+Research-oriented modules that are intentionally separate from the product core:
+
+- Scientific papers.
+- Paper detection, parsing and summarization.
+- Future full MLOps capabilities beyond the current MVP.
+
+## Architecture Layers
+
+### Ingestion Layer
+
+Moves Telegram content into durable event and storage layers.
+
+- `rbc_telegram_collector/`: Telegram collection and backfill code.
+- `message_persister/`: idempotent raw-message persistence.
+- `preprocessor/`: text cleanup, language and normalized payload preparation.
+- `source_resolver/`: source/provenance resolution.
+- `kafka/topics.yml`: event topic definitions.
+- `migrations/001_initial_schema.sql` and later migrations: PostgreSQL schema
+  evolution.
+
+### Understanding Layer
+
+Turns messages into analysis-ready signals.
+
+- `sentiment_analyzer/`: sentiment and emotion enrichment.
+- `ner_extractor/`: entity extraction, normalization and canonical resolution.
+- `topic_clusterer/`: topic assignment, topic pipeline and novelty logic.
+- `topic_scorer/`: topic importance scoring.
+- `llm_enricher/`: summaries, labels, key actors, timeline and what-changed
+  enrichment.
+- `schemas/`: JSON Schema contracts for raw, preprocessed, enriched, topic,
+  training and paper events.
+
+### Analyst Layer
+
+Serves product views and user workflows.
+
+- `analytics_api/`: aiohttp API for topics, feed, entities, graph, review,
+  annotation, datasets, experiments, models and papers.
+- `auth_service/`: authentication, roles, audit, channel visibility and user
+  reactions.
+- `frontend/`: Next.js application for Core Analytics, Quality Lab,
+  Experimental and Admin/Settings routes.
+- `neo4j/`: graph schema initialization.
+
+### Quality Layer
+
+Closes the loop between analyst judgment and model quality.
+
+- `analytics_api/analytics_api/topic_review.py`: review-task API capability.
+- `analytics_api/analytics_api/annotation.py`: annotation and dataset API
+  capability.
+- `dataset_builder/`: builds dataset artifacts from reviewed/annotated cases.
+- `topic_benchmark_runner/`: benchmark metrics and experiment runner.
+- `analytics_api/analytics_api/mlops.py`: dataset validation, training preview,
+  candidate model records, evaluation helpers and explicit deploy helpers.
+- `training_orchestrator/`: MVP/mock-capable worker for candidate training jobs.
+- `migrations/013_topic_benchmark.sql` through
+  `migrations/021_model_training_mlops.sql`: benchmark, annotation, review,
+  novelty and model lifecycle tables.
+
+Some MLOps pieces are implemented as logical capabilities inside
+`analytics_api.mlops` and `training_orchestrator`, not as separate production
+services. Full trainer/evaluator/deployer service separation remains future
+work unless a concrete service directory exists.
+
+### Experimental Layer
+
+Research modules and non-core analysis capabilities.
+
+- `paper_detector/`: scientific-paper detection.
+- `paper_parser/`: arXiv/OpenReview/PDF parsing.
+- `paper_summarizer/`: paper summarization.
+- `migrations/022_scientific_papers.sql`: paper tables.
+- `docs/scientific-papers.md`: module documentation.
+
+## Repository Map
+
+```text
 Tg_news_project/
-│
-├── docs/                                    # Documentation
-│   ├── contracts.md                         # 📋 MAIN: Data contracts specification
-│   ├── engineering-standards.md             # Engineering standards
-│   └── INFRASTRUCTURE.md                    # Infrastructure setup guide
-│
-├── schemas/                                 # JSON Schema definitions
-│   ├── raw_message.schema.json             # Schema: Raw Telegram message
-│   ├── persisted_message.schema.json       # Schema: Persistence confirmation
-│   ├── preprocessed_message.schema.json    # Schema: Preprocessed text
-│   ├── sentiment_enriched.schema.json      # Schema: Sentiment analysis
-│   ├── ner_enriched.schema.json           # Schema: Named entities
-│   ├── graph_update.schema.json           # Schema: Graph updates
-│   └── README.md                           # Schema documentation
-│
-├── examples/                               # Example events
-│   ├── raw_message.example.json
-│   ├── persisted_message.example.json
-│   ├── preprocessed_message.example.json
-│   ├── sentiment_enriched.example.json
-│   ├── ner_enriched.example.json
-│   └── graph_update.example.json
-│
-├── migrations/                             # PostgreSQL migrations
-│   └── 001_initial_schema.sql            # Initial database schema
-│
-├── neo4j/                                 # Neo4j initialization
-│   └── init.cypher                       # Graph schema and constraints
-│
-├── kafka/                                 # Kafka configuration
-│   └── topics.yml                        # Topic definitions
-│
-├── scripts/                               # Automation scripts
-│   ├── create_kafka_topics.sh           # Create all Kafka topics
-│   ├── apply_migrations.sh              # Apply PostgreSQL migrations
-│   ├── init_neo4j.sh                    # Initialize Neo4j
-│   └── validate_schemas.sh              # Validate JSON schemas
-│
-├── rbc_telegram_collector/               # Existing ingestion service
-│   ├── collector/                        # Service code
-│   ├── config.yaml                       # Configuration
-│   ├── Dockerfile                        # Docker image
-│   └── README.md                         # Service documentation
-│
-├── docker-compose.infrastructure.yml     # Full infrastructure stack
-├── .env.example                          # Environment variables template
-├── .gitignore                            # Git ignore rules
-└── README.md                             # 📘 Project overview
-
+  analytics_api/              Analyst, Quality Lab and Experimental APIs
+  auth_service/               Auth, RBAC, audit and source admin APIs
+  dataset_builder/            Quality Lab dataset artifact builder
+  docs/                       Architecture, contracts, UI and feature docs
+  examples/                   Example event payloads
+  frontend/                   Next.js Telegram News Intelligence UI
+  kafka/                      Kafka topic definitions
+  llm_enricher/               LLM/baseline enrichment and summaries
+  message_persister/          Raw-message persistence
+  migrations/                 PostgreSQL migrations 001..022
+  models/                     Local model artifact placeholder
+  neo4j/                      Graph initialization
+  ner_extractor/              Entity extraction and normalization
+  paper_detector/             Experimental paper detection
+  paper_parser/               Experimental paper parsing
+  paper_summarizer/           Experimental paper summarization
+  preprocessor/               Text preprocessing
+  rbc_telegram_collector/     Telegram collection and backfill
+  schemas/                    JSON event schemas
+  scripts/                    Migration, topic, import and backfill scripts
+  sentiment_analyzer/         Sentiment and emotion enrichment
+  source_resolver/            Source/provenance resolution
+  tests/                      Unit and integration tests
+  topic_benchmark_runner/     Quality Lab benchmark experiments
+  topic_clusterer/            Topic assignment and novelty pipeline
+  topic_scorer/               Importance scoring
+  training_orchestrator/      Candidate-training MVP worker
 ```
 
-## Key Files
+## Current Event Contracts
 
-### 🔴 Critical Documents
+`schemas/*.schema.json` currently includes contracts for:
 
-1. **`docs/contracts.md`** - Complete data contracts specification
-   - Kafka topics table
-   - JSON schemas overview
-   - Postgres DDL
-   - Neo4j model
-   - DLQ/retry/error handling
+- Raw, persisted and preprocessed Telegram messages.
+- Sentiment, NER, graph updates and topic assignments.
+- Candidate training job events.
+- Model version and deployment-request events.
+- Scientific paper detection, parsing and summarization events.
 
-2. **`migrations/001_initial_schema.sql`** - PostgreSQL schema
-   - All tables with indexes
-   - Constraints and foreign keys
-   - Views and functions
-   - Maintenance procedures
+Keep `docs/contracts.md` as the detailed source for event semantics and storage
+contracts.
 
-3. **`neo4j/init.cypher`** - Neo4j graph schema
-   - Constraints (uniqueness)
-   - Indexes (performance)
-   - Helper procedures
-   - Sample queries
+## Data Stores
 
-4. **`kafka/topics.yml`** - Kafka topics configuration
-   - All topics with partitions/retention
-   - Consumer groups
-   - Creation commands
+### PostgreSQL
 
-### 🟡 JSON Schemas (6 files)
+PostgreSQL stores raw messages, preprocessed messages, sentiment, entities,
+topic assignments/runs, topic review/annotation data, benchmark data, model
+lifecycle metadata, source/admin data and papers metadata.
 
-All schemas in `schemas/*.schema.json`:
-- `raw_message` - From Telegram
-- `persisted_message` - DB confirmation
-- `preprocessed_message` - Cleaned text
-- `sentiment_enriched` - Sentiment analysis
-- `ner_enriched` - Named entities
-- `graph_update` - Neo4j commands
+### Neo4j
 
-### 🟢 Automation Scripts (4 files)
+Neo4j stores graph-oriented views around:
 
-All scripts in `scripts/*.sh`:
-- `create_kafka_topics.sh` - Create all Kafka topics
-- `apply_migrations.sh` - Apply PostgreSQL migrations
-- `init_neo4j.sh` - Initialize Neo4j schema
-- `validate_schemas.sh` - Validate JSON schemas
+- `Message`
+- `Entity`
+- `Channel`
+- `Topic`
 
-## Quick Reference
+Graph writes and graph analytics are represented in the codebase, but some graph
+builder/writer capabilities may be logical or planned depending on deployment.
+Do not document a standalone production service unless the service exists.
 
-### Architecture
+### Object / Artifact Storage
 
-```
-Telegram → raw.telegram.messages → message-persister → Postgres
-                ↓
-         preprocessed.messages
-                ↓
-    ┌───────────┴──────────┐
-    ↓                      ↓
-sentiment.enriched    ner.enriched
-    └───────────┬──────────┘
-                ↓
-         graph.updates → neo4j-writer → Neo4j
-```
+Object storage is the intended place for dataset exports, model artifacts,
+benchmark artifacts and release manifests. Current local development may use
+paths and MVP/mock artifacts.
 
-### Topics Summary
+## Frontend Navigation Model
 
-| Topic | Partitions | Retention | Description |
-|-------|-----------|-----------|-------------|
-| `raw.telegram.messages` | 6 | 30d | Raw Telegram messages |
-| `persisted.messages` | 6 | 7d | Persistence confirmation |
-| `preprocessed.messages` | 6 | 30d | Preprocessed text |
-| `sentiment.enriched` | 6 | 30d | Sentiment analysis |
-| `ner.enriched` | 6 | 30d | Named entities |
-| `graph.updates` | 6 | 7d | Neo4j updates |
-| `dlq.*` | 3 | 90d | Dead letter queues |
+The frontend sidebar should be organized by user intent:
 
-### Message Key Format
+- Core Analytics: Dashboard, Topics, Feed, Entities, Graph, Sources.
+- Quality Lab: Review topics, Annotation, Datasets, Topic benchmark experiments,
+  Candidate training, Models.
+- Experimental: Scientific papers.
+- Admin/Settings: Settings, channel administration and audit log.
 
-All messages use: `{channel}:{message_id}`
+Datasets, training and models are part of the Quality Lab, not independent
+business features. Papers are Experimental unless they become a primary product
+line later.
 
-Examples:
-- `rbc_news:123456`
-- `cbpub:789012`
-
-This ensures:
-- ✅ Ordering within channel
-- ✅ Idempotency (natural key)
-- ✅ Partition distribution
-
-### Database Tables
-
-**PostgreSQL** (8 tables):
-- `raw_messages` - Raw Telegram data
-- `preprocessed_messages` - Cleaned text
-- `sentiment_results` - Sentiment scores
-- `ner_results` - Extracted entities
-- `entity_relations` - SPO triples
-- `processed_events` - Deduplication
-- `outbox` - Transactional outbox
-- `channels` - Channel metadata
-
-**Neo4j** (4 node types):
-- `Message` - Telegram message
-- `Entity` - Named entity
-- `Channel` - Telegram channel
-- `Topic` - Thematic cluster
-
-### Common Commands
+## Common Commands
 
 ```bash
 # Start infrastructure
 docker-compose -f docker-compose.infrastructure.yml up -d
 
-# Initialize databases
+# Apply PostgreSQL migrations
 ./scripts/apply_migrations.sh
+
+# Initialize Neo4j
 ./scripts/init_neo4j.sh
 
 # Create Kafka topics
@@ -175,37 +226,16 @@ docker-compose -f docker-compose.infrastructure.yml up -d
 # Validate schemas
 ./scripts/validate_schemas.sh
 
-# Check services
-docker-compose -f docker-compose.infrastructure.yml ps
-
-# View logs
-docker logs telegram-news-postgres
-docker logs telegram-news-neo4j
-docker logs telegram-news-kafka
+# Frontend tests
+cd frontend && npm test
 ```
 
-## Next Steps
+## Documentation Pointers
 
-1. ✅ Contracts defined
-2. ✅ Schemas created
-3. ✅ Database DDL ready
-4. ✅ Infrastructure config ready
-5. ⏳ Implement services:
-   - `message-persister`
-   - `preprocessor`
-   - `sentiment-analyzer`
-   - `ner-extractor`
-   - `graph-builder`
-   - `neo4j-writer`
-
-## Service Template
-
-Use `docs/engineering-standards.md` section 7 for new service skeleton.
-
-Each service should:
-- ✅ Follow plugin architecture (sources/sinks)
-- ✅ Use Pydantic for config
-- ✅ Implement idempotency
-- ✅ Have retry + DLQ logic
-- ✅ Export Prometheus metrics
-- ✅ Include Dockerfile + docker-compose.yml
+- `docs/IMPLEMENTATION.md`: current implementation status and caveats.
+- `docs/contracts.md`: data contracts.
+- `docs/model-training.md`: Quality Lab candidate-training flow.
+- `docs/topic_modeling_benchmark.md`: topic benchmark experiments.
+- `docs/topic_novelty_detection.md`: novelty detection.
+- `docs/annotation_guidelines.md`: annotation workflow.
+- `docs/scientific-papers.md`: Experimental papers module.

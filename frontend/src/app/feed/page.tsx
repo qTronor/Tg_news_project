@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Header } from "@/components/layout/header";
 import { PageTransition } from "@/components/layout/page-transition";
@@ -17,8 +17,9 @@ export default function FeedPage() {
   const { t } = useTranslation();
   const { isDemo } = useDemoContext();
   const searchParams = useSearchParams();
+  const initialChannel = searchParams.get("channel") || "All";
   const [search, setSearch] = useState("");
-  const [channelFilter, setChannelFilter] = useState("All");
+  const [channelFilter, setChannelFilter] = useState(initialChannel);
   const [topicFilter, setTopicFilter] = useState("All");
   const [sentimentFilter, setSentimentFilter] = useState("All");
   const [liveMode, setLiveMode] = useState(false);
@@ -32,13 +33,6 @@ export default function FeedPage() {
 
   const { data: messages, isLoading, isError } = useMessages(filters);
   const { data: topics } = useTopics();
-
-  useEffect(() => {
-    const channel = searchParams.get("channel");
-    if (channel && channel !== channelFilter) {
-      setChannelFilter(channel);
-    }
-  }, [channelFilter, searchParams]);
 
   const channels = useMemo(() => {
     if (!messages) return [];

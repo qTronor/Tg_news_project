@@ -1,0 +1,44 @@
+service_name: "topic-scorer"
+
+postgres:
+  host: "postgres"
+  port: 5432
+  database: "telegram_news"
+  user: "postgres"
+  password: "postgres"
+  min_size: 1
+  max_size: 5
+  command_timeout: 30
+
+metrics:
+  host: "0.0.0.0"
+  port: 8005
+
+logging:
+  level: "INFO"
+
+scoring:
+  version: "v1"
+  weights:
+    growth_rate: 0.22
+    message_count: 0.12
+    unique_channels: 0.14
+    new_channel_ratio: 0.08
+    unique_entities: 0.10
+    novelty: 0.10
+    sentiment_intensity: 0.10
+    sentiment_shift: 0.06
+    cluster_density: 0.08
+  level_thresholds:
+    low: 0.0
+    medium: 0.35
+    high: 0.65
+    critical: 0.85
+  min_messages_for_full_score: 3
+  small_cluster_penalty: 0.5
+  history_window_days: 14
+  growth_split_fraction: 0.5
+  epsilon: 0.000001
+
+scheduler:
+  interval_seconds: 300

@@ -143,6 +143,7 @@ class FirstSourcePostgresIntegrationTest(unittest.IsolatedAsyncioTestCase):
                     "message_date": now,
                 }
             ],
+            topic_metadata={},
         )
         await clusterer._persist_clustering_run_pg(batch)
 

@@ -65,7 +65,73 @@ class LoggingConfig(BaseModel):
     level: str = "INFO"
 
 
+class SentimentModelConfig(BaseModel):
+    """Config for one HF sentiment classification model."""
+
+    name: str = "cointegrated/rubert-tiny-sentiment-balanced"
+    local_path: Optional[str] = None
+    cache_dir: Optional[str] = None
+    device: str = "auto"
+    use_float16: bool = True
+    batch_size: int = 32
+    max_length: int = 384
+    chunk_overlap: int = 64
+    neutral_threshold: float = 0.55
+    version: str = "1.0.0"
+
+
+class EmotionModelConfig(BaseModel):
+    """Config for one HF emotion classification model."""
+
+    name: str = ""
+    version: str = "1.0.0"
+    device: str = "auto"
+    use_float16: bool = True
+    batch_size: int = 32
+    max_length: int = 128
+    cache_dir: Optional[str] = None
+    enabled: bool = True
+
+
+class ModelsConfig(BaseModel):
+    """Per-language model routing config replacing the old single-model ModelConfig."""
+
+    # RU sentiment: rubert-tiny-sentiment-balanced (default) or blanchefort
+    ru: SentimentModelConfig = SentimentModelConfig(
+        name="cointegrated/rubert-tiny-sentiment-balanced",
+        version="1.0.0",
+    )
+    # EN / other supported languages → multilingual XLM-R
+    multilingual: SentimentModelConfig = SentimentModelConfig(
+        name="cardiffnlp/twitter-xlm-roberta-base-sentiment",
+        version="1.0.0",
+        max_length=512,
+        chunk_overlap=64,
+        neutral_threshold=0.50,
+    )
+    # RU emotion: rubert-tiny2-cedr (joy/sadness/surprise/fear/anger)
+    emotion_ru: EmotionModelConfig = EmotionModelConfig(
+        name="cointegrated/rubert-tiny2-cedr-emotion-detection",
+        version="1.0.0",
+        enabled=True,
+    )
+    # EN emotion: distilroberta + disgust label
+    emotion_en: EmotionModelConfig = EmotionModelConfig(
+        name="j-hartmann/emotion-english-distilroberta-base",
+        version="1.0.0",
+        enabled=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compat alias: old config.yaml may still have a top-level `model:`
+# block. We keep ModelConfig as a thin alias so EnvConfig can still accept it,
+# but AppConfig now uses `models: ModelsConfig`.
+# ---------------------------------------------------------------------------
 class ModelConfig(BaseModel):
+    """Legacy single-model config. Only used when reading old YAML; service
+    now reads from AppConfig.models instead."""
+
     name: str = "cointegrated/rubert-tiny-sentiment-balanced"
     local_path: Optional[str] = None
     label2id_path: Optional[str] = None
@@ -91,7 +157,7 @@ class AppConfig(BaseModel):
     health: HealthConfig = HealthConfig()
     schemas: SchemaConfig = SchemaConfig()
     logging: LoggingConfig = LoggingConfig()
-    model: ModelConfig = ModelConfig()
+    models: ModelsConfig = ModelsConfig()
 
 
 class EnvConfig(BaseSettings):
@@ -112,7 +178,7 @@ class EnvConfig(BaseSettings):
     health: Optional[HealthConfig] = None
     schemas: Optional[SchemaConfig] = None
     logging: Optional[LoggingConfig] = None
-    model: Optional[ModelConfig] = None
+    models: Optional[ModelsConfig] = None
 
 
 def _deep_update(base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -124,10 +190,20 @@ def _deep_update(base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any
     return base
 
 
+def _migrate_legacy_model_key(data: Dict[str, Any]) -> Dict[str, Any]:
+    """If YAML has the old ``model:`` key, promote it into ``models.ru``."""
+    if "model" in data and "models" not in data:
+        old = data.pop("model")
+        # Treat old single-model config as the RU backend.
+        data["models"] = {"ru": old}
+    return data
+
+
 def load_config(path: Path) -> AppConfig:
     data: Dict[str, Any] = {}
     if path and path.exists():
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    data = _migrate_legacy_model_key(data)
     file_config = AppConfig.model_validate(data)
     env_config = EnvConfig().model_dump(exclude_none=True)
     merged = _deep_update(file_config.model_dump(), env_config)

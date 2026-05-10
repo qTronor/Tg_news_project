@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tg-news.local/schemas/model_version_created.schema.json",
+  "title": "Model Version Created",
+  "type": "object",
+  "required": ["event_id", "event_type", "event_timestamp", "event_version", "source_system", "payload"],
+  "properties": {
+    "event_id": { "type": "string" },
+    "event_type": { "const": "model_version_created" },
+    "event_timestamp": { "type": "string", "format": "date-time" },
+    "event_version": { "type": "string" },
+    "source_system": { "type": "string" },
+    "trace_id": { "type": "string" },
+    "payload": {
+      "type": "object",
+      "required": ["model_version_id", "model_type", "version", "status", "artifact_path"],
+      "properties": {
+        "model_version_id": { "type": "string" },
+        "model_type": {
+          "enum": ["topic_classifier", "sentiment_classifier", "embedding_model", "ner_model"]
+        },
+        "version": { "type": "string" },
+        "status": { "const": "candidate" },
+        "artifact_path": { "type": "string" },
+        "metrics": { "type": "object" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

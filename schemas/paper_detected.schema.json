@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PaperDetected",
+  "description": "Scientific paper detection event emitted by paper_detector",
+  "type": "object",
+  "required": ["event_id", "source_message_id", "source_channel", "source_type", "detected_at"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {"type": "string", "description": "Unique event ID"},
+    "source_message_id": {"type": "string", "description": "Original preprocessed message ID"},
+    "source_channel": {"type": "string", "description": "Telegram channel name"},
+    "source_url": {"type": ["string", "null"], "description": "Detected paper URL"},
+    "source_type": {
+      "type": "string",
+      "enum": ["arxiv", "openreview", "doi", "pdf_url", "telegram_file", "webpage"],
+      "description": "Type of paper source"
+    },
+    "detected_at": {"type": "string", "format": "date-time"},
+    "telegram_file_id": {"type": ["string", "null"], "description": "Telegram file ID if PDF attachment"},
+    "paper_db_id": {"type": "string", "description": "UUID of scientific_papers row"},
+    "metadata": {"type": "object", "additionalProperties": true}
+  }
+}
