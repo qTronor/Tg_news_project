@@ -88,7 +88,7 @@ export default function EntitiesPage() {
                         whileHover={{ backgroundColor: "var(--accent)" }}
                         className="grid grid-cols-7 px-5 py-3 border-b border-border items-center transition-colors duration-200 cursor-pointer"
                       >
-                        <div className="col-span-2 text-sm font-medium text-foreground truncate pr-2">{e.text}</div>
+                        <div className="col-span-2 text-sm font-medium text-foreground truncate pr-2">{e.canonical_name || e.text}</div>
                         <div><Badge variant="entity" color={entityTypeColor(e.type)}>{e.type}</Badge></div>
                         <div className="text-right text-sm text-foreground">{formatNumber(e.mention_count || 0)}</div>
                         <div className="text-right text-sm text-muted-foreground">{e.topic_count || 0}</div>

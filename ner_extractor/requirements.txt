@@ -10,3 +10,5 @@ torch==2.0.1
 transformers==4.36.0
 natasha>=1.6.0
 pymorphy2>=0.9.1
+rapidfuzz>=3.0.0
+pyahocorasick>=2.0.0

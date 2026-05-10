@@ -31,6 +31,13 @@ model:
   # Compact multilingual backend suitable for CPU fallback or RTX 3050 Laptop.
   # Keep this multilingual for Variant C so OTHER languages still enter topic clustering.
   sbert_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+  # Select by alias from embedding_models or by full Hugging Face model id.
+  embedding_model: "baseline"
+  embedding_models:
+    baseline: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    multilingual_mpnet: "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+    labse: "sentence-transformers/LaBSE"
+    rubert: "ai-forever/sbert_large_nlu_ru"
   # cache_dir: "/models/hf-cache"
   device: "auto"
   use_float16: true
@@ -46,6 +53,13 @@ clustering:
   n_neighbors: 15
   min_dist: 0.1
   umap_n_components: 50
+  n_components: 50
+  top_n_words: 10
+  ngram_range: [1, 2]
+  nr_topics:
+  min_topic_size:
+  seed: 42
+  dataset_version:
   fallback_similarity_threshold: 0.68
   scheduler_interval_seconds: 30
 

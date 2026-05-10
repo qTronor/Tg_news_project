@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import asyncpg
@@ -18,6 +20,52 @@ from llm_enricher.schemas import (
 )
 
 logger = logging.getLogger("llm_enricher.repository")
+
+_SUMMARY_TTL_SECONDS = 7 * 24 * 3600  # 7 days
+
+_Q_READ_SUMMARY = """
+SELECT payload_json, status, model_provider, model_name, prompt_version,
+       generated_at, expires_at, input_fingerprint
+FROM topic_summaries
+WHERE public_cluster_id = $1 AND summary_kind = $2 AND language = $3
+  AND expires_at > NOW();
+"""
+
+_Q_UPSERT_SUMMARY = """
+INSERT INTO topic_summaries (
+    public_cluster_id, summary_kind, language, prompt_version,
+    model_provider, model_name, input_fingerprint,
+    payload_json, status, generated_at, expires_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10)
+ON CONFLICT (public_cluster_id, summary_kind, language) DO UPDATE SET
+    prompt_version    = EXCLUDED.prompt_version,
+    model_provider    = EXCLUDED.model_provider,
+    model_name        = EXCLUDED.model_name,
+    input_fingerprint = EXCLUDED.input_fingerprint,
+    payload_json      = EXCLUDED.payload_json,
+    status            = EXCLUDED.status,
+    generated_at      = NOW(),
+    expires_at        = EXCLUDED.expires_at;
+"""
+
+_Q_INSERT_RUN = """
+INSERT INTO topic_summary_runs (
+    public_cluster_id, triggered_by, language, kinds_requested,
+    kinds_succeeded, kinds_failed, total_cost_usd, total_latency_ms,
+    started_at, finished_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+"""
+
+
+@dataclass
+class SummaryRecord:
+    payload: dict[str, Any]
+    status: str
+    model_provider: str
+    model_name: str
+    prompt_version: str
+    generated_at: Optional[datetime]
+    input_fingerprint: str
 
 _Q_CLUSTER_LANG_SENTIMENT = """
 WITH cluster_msgs AS (
@@ -271,6 +319,92 @@ class ClusterContextRepository:
             graph_community_summary=graph_community_summary,
             graph_subgraph_metrics=graph_subgraph_metrics,
         )
+
+
+    async def read_summary(
+        self,
+        public_cluster_id: str,
+        summary_kind: str,
+        language: str,
+        input_fingerprint: str,
+        refresh: bool,
+    ) -> Optional[SummaryRecord]:
+        if refresh:
+            return None
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_Q_READ_SUMMARY, public_cluster_id, summary_kind, language)
+        if row is None:
+            return None
+        if row["input_fingerprint"] != input_fingerprint:
+            return None
+        raw = row["payload_json"]
+        payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        return SummaryRecord(
+            payload=payload,
+            status=row["status"],
+            model_provider=row["model_provider"],
+            model_name=row["model_name"],
+            prompt_version=row["prompt_version"],
+            generated_at=row["generated_at"],
+            input_fingerprint=row["input_fingerprint"],
+        )
+
+    async def upsert_summary(
+        self,
+        public_cluster_id: str,
+        summary_kind: str,
+        language: str,
+        prompt_version: str,
+        model_provider: str,
+        model_name: str,
+        input_fingerprint: str,
+        payload: dict[str, Any],
+        status: str,
+    ) -> None:
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=_SUMMARY_TTL_SECONDS)
+        payload_str = json.dumps(payload, ensure_ascii=False)
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                _Q_UPSERT_SUMMARY,
+                public_cluster_id,
+                summary_kind,
+                language,
+                prompt_version,
+                model_provider,
+                model_name,
+                input_fingerprint,
+                payload_str,
+                status,
+                expires_at,
+            )
+
+    async def record_run(
+        self,
+        public_cluster_id: str,
+        triggered_by: str,
+        language: str,
+        kinds_requested: list[str],
+        kinds_succeeded: list[str],
+        kinds_failed: list[str],
+        total_cost_usd: float,
+        total_latency_ms: int,
+        started_at: datetime,
+    ) -> None:
+        finished_at = datetime.now(timezone.utc)
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                _Q_INSERT_RUN,
+                public_cluster_id,
+                triggered_by,
+                language,
+                kinds_requested,
+                kinds_succeeded,
+                kinds_failed,
+                total_cost_usd,
+                total_latency_ms,
+                started_at,
+                finished_at,
+            )
 
 
 def _parse_json(value: Any) -> Any:

@@ -56,3 +56,30 @@ TOPIC_COMPARISON_DURATION = Histogram(
     "Topic comparison computation latency in seconds",
     buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
 )
+
+TRAINING_JOBS_TOTAL = Counter(
+    "training_jobs_total",
+    "Total model training jobs created or processed",
+    ["status", "task_type"],
+)
+TRAINING_JOBS_FAILED_TOTAL = Counter(
+    "training_jobs_failed_total",
+    "Total failed model training jobs",
+    ["task_type"],
+)
+TRAINING_DURATION_SECONDS = Histogram(
+    "training_duration_seconds",
+    "Training job duration in seconds",
+    ["task_type"],
+    buckets=(0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600),
+)
+MODEL_VERSIONS_TOTAL = Counter(
+    "model_versions_total",
+    "Total model versions registered",
+    ["model_type", "status"],
+)
+MODEL_DEPLOYMENTS_TOTAL = Counter(
+    "model_deployments_total",
+    "Total model deployments",
+    ["model_type", "status"],
+)

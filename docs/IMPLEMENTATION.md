@@ -1,266 +1,277 @@
-# Реализация системы Telegram News Pipeline
+# Telegram News Intelligence Implementation Status
 
-Документ описывает реализацию системы в целевом виде: все контуры, сервисы и технологии считаются развернутыми и работающими в единой платформе потокового анализа.
+This document describes the current implementation status of the Telegram News
+Intelligence system. It avoids treating planned, MVP or mock capabilities as
+fully production-ready services.
 
-PlantUML-диаграмма последовательности: [`implementation_sequence.puml`](./implementation_sequence.puml)
-Концептуальная (high-level) последовательность: [`implementation_sequence_conceptual.puml`](./implementation_sequence_conceptual.puml)
-Компонентная обзорная (updated): [`architecture_overview_updated.puml`](./architecture_overview_updated.puml)
+Related diagrams:
 
-## 1. Архитектурная модель реализации
+- [`implementation_sequence.puml`](./implementation_sequence.puml)
+- [`implementation_sequence_conceptual.puml`](./implementation_sequence_conceptual.puml)
+- [`architecture_overview_updated.puml`](./architecture_overview_updated.puml)
 
-Система реализована как событийно-ориентированная микросервисная платформа с четырьмя основными уровнями:
+## 1. Status Summary
 
-- клиентский слой;
-- платформа обработки;
-- платформенные ресурсы;
-- внешние интерфейсы взаимодействия.
+### Core pipeline implemented
 
-Внутри платформы обработки выделены контуры:
+The core news pipeline is implemented as an event-oriented set of Python
+services and APIs:
 
-- контур сбора и подготовки данных;
-- контур аналитики AI/NLP;
-- контур тематической кластеризации и детекции новизны;
-- контур графовой аналитики;
-- контур дообучения и жизненного цикла моделей;
-- контур API и управления доступом.
+- Telegram collection/backfill.
+- Raw-message persistence.
+- Preprocessing.
+- Sentiment enrichment.
+- Entity extraction and normalization.
+- Topic clustering, topic pipeline persistence and novelty logic.
+- Topic importance scoring.
+- LLM/baseline enrichment for summaries, labels and key actor/timeline views.
+- Analytics API and Next.js frontend.
+- Auth/admin service for users, roles, audit and source/channel operations.
 
-## 2. Технологический стек
+### Quality Lab partially implemented
 
-### 2.1 Серверный и событийный контур
+Quality Lab exists as a product area but not every capability is a mature
+production MLOps system:
 
-- Python 3.11+;
-- Apache Kafka + Zookeeper (транспорт событий и буферизация потока);
-- aiokafka (producer/consumer);
-- asyncpg + SQLAlchemy (асинхронный доступ к PostgreSQL);
-- Pydantic (контракты и конфигурации);
-- JSON Schema (валидация событий);
-- DLQ-топики для обработки ошибок.
+- Topic review is implemented as API/UI capability.
+- Annotation and dataset building are implemented as API/UI plus
+  `dataset_builder/`.
+- Topic benchmark experiments are implemented as benchmark APIs/UI and
+  `topic_benchmark_runner/`.
+- Training jobs and model registry are implemented as an MVP/candidate flow.
 
-### 2.2 Аналитика и ML/NLP
+The intended human-in-the-loop cycle is:
 
-- transformers + RuBERT для sentiment;
-- Natasha + pymorphy2 для NER и нормализации сущностей;
-- Sentence-BERT для семантических эмбеддингов;
-- UMAP для снижения размерности;
-- HDBSCAN для плотностной кластеризации тем;
-- PyArrow/Parquet для выгрузки результатов кластеризации;
-- MLOps-контур: active learning, training orchestrator, model registry, model deployer.
+`topic error or uncertainty -> review -> annotation/dataset -> benchmark or training candidate -> explicit deploy -> better analytics`.
 
-### 2.3 Хранилища и графовый слой
+Training requires explicit user consent. Candidate models are not deployed
+automatically. Deployment requires a separate explicit deploy confirmation.
 
-- PostgreSQL 15 (сырые, промежуточные и аналитические данные);
-- Neo4j 5.x (граф «тема-сообщение-канал-сущность»);
-- Redis 7 (кэш и token blacklist);
-- Object Storage (MinIO/S3) для артефактов моделей и датасетов.
+### MLOps/training currently MVP/mock where applicable
 
-### 2.4 API, UI и эксплуатация
+The current training/model lifecycle code supports validation, preview, job
+records, candidate model records, evaluation metadata and explicit deploy/rollback
+actions. In places where the code or configuration uses `mode: "mock"` or mock
+trainer behavior, it should be treated as MVP infrastructure for controlled
+candidate training, not as production ML training.
 
-- Auth Service: FastAPI, JWT (python-jose), bcrypt, slowapi;
-- Analytics API: aiohttp;
-- Frontend: Next.js 16, React 19, TypeScript, Tailwind CSS v4, TanStack Query, Recharts, Cytoscape.js;
-- Observability: Prometheus, Grafana, Kafka UI, Neo4j Browser;
-- Контейнеризация: Docker + Docker Compose.
+Logical capabilities such as trainer, evaluator, registry and deployer are
+implemented primarily inside `analytics_api/analytics_api/mlops.py` and
+`training_orchestrator/`. They are not separate production services unless a
+concrete service directory exists.
 
-## 3. Реализованные сервисы платформы
+### Scientific papers experimental module
 
-| Сервис | Назначение | Вход | Выход | Технологии |
-|---|---|---|---|---|
-| `rbc_telegram_collector` | Сбор сообщений из Telegram | Telegram MTProto | JSONL | Telethon |
-| `kafka_bridge` | Перевод JSONL во внутренние события | JSONL | `raw.telegram.messages` | Python |
-| `message_persister` | Надежная запись raw-слоя и идемпотентность | `raw.telegram.messages` | `persisted.messages` | aiokafka, asyncpg |
-| `preprocessor` | Очистка и нормализация текста | `raw.telegram.messages`, `persisted.messages` | `preprocessed.messages` | regex/NLP utils, aiokafka |
-| `sentiment_analyzer` | Тональность и вероятности классов | `preprocessed.messages` | `sentiment.enriched` | transformers, RuBERT |
-| `ner_extractor` | Сущности и связи co-occurrence | `preprocessed.messages` | `ner.enriched` | Natasha, pymorphy2 |
-| `topic_clusterer` | Кластеризация сообщений по темам | `preprocessed.messages` | `topic.assignments` | SBERT, UMAP, HDBSCAN |
-| `topic_novelty_detector` | Детекция новых/дрейфующих тем | `topic.assignments` | `topic.novelty.candidates` | novelty rules, drift metrics |
-| `active_learning_sampler` | Отбор кейсов на разметку | `topic.novelty.candidates` | `topic.labeling.tasks` | uncertainty sampling |
-| `annotation_gateway` | Разметка и подтверждение тем | `topic.labeling.tasks` | `topic.labels` | API + reviewer UI |
-| `dataset_builder` | Формирование версионированных датасетов | `topic.labels`, PG | `ml.training.jobs` | data pipelines |
-| `training_orchestrator` | Планирование retrain и запуск job | `ml.training.jobs` | training run spec | scheduler/cron |
-| `model_trainer` | Дообучение тематических моделей | training run spec | `ml.training.results` | PyTorch/transformers |
-| `model_evaluator` | Проверка quality gates | `ml.training.results` | `ml.model.registry.events` | evaluation metrics |
-| `model_registry` | Версионирование и lineage моделей | `ml.model.registry.events` | `model://topic/<version>` | registry + metadata |
-| `model_deployer` | Canary rollout и rollback | `model://topic/<version>` | `ml.model.deployments` | deployment controller |
-| `graph-builder` | Агрегация аналитики в графовые апдейты | `sentiment.enriched`, `ner.enriched` | `graph.updates` | event aggregation |
-| `neo4j-writer` | Применение графовых обновлений | `graph.updates` | Neo4j graph | Cypher MERGE |
-| `analytics_api` | Выдача аналитических представлений | PostgreSQL, Neo4j | REST `/analytics/*` | aiohttp |
-| `auth_service` | Аутентификация, роли, админ-функции | REST `/api/auth/*` | JWT/права доступа | FastAPI |
-| `frontend` | Визуальная аналитика и навигация | REST APIs | UI маршруты | Next.js/React |
+Scientific paper detection, parsing and summarization are present as an
+Experimental/Research module:
 
-## 4. Сквозной поток данных
+- `paper_detector/`
+- `paper_parser/`
+- `paper_summarizer/`
+- `analytics_api` paper endpoints
+- frontend `/papers`
+
+This module is not part of the primary Product Core unless the product direction
+explicitly changes.
+
+## 2. Product Layers
+
+### Ingestion Layer
+
+Purpose: move Telegram content into durable streams and storage.
+
+Implemented pieces:
+
+- `rbc_telegram_collector`: Telegram collection/backfill.
+- `message_persister`: idempotent raw-message persistence.
+- `preprocessor`: text preprocessing and normalized event production.
+- Kafka topic definitions in `kafka/topics.yml`.
+- PostgreSQL migrations in `migrations/`.
+
+### Understanding Layer
+
+Purpose: turn messages into analytic signals.
+
+Implemented pieces:
+
+- `sentiment_analyzer`: sentiment/emotion enrichment.
+- `ner_extractor`: NER, provider chain and canonical normalization.
+- `source_resolver`: source/provenance logic.
+- `topic_clusterer`: topic assignment, BERTopic-like pipeline and novelty.
+- `topic_scorer`: importance scoring.
+- `llm_enricher`: summaries, labels, timelines and key actors.
+
+Some graph update/writer capabilities are represented by contracts, docs and API
+logic. Do not describe a standalone `graph-builder` or `neo4j-writer` as a
+production service unless it exists in the repository/deployment.
+
+### Analyst Layer
+
+Purpose: expose useful product workflows to analysts.
+
+Implemented pieces:
+
+- `analytics_api`: topics, topic detail, feed, entities, graph analytics,
+  review, annotation, datasets, benchmarks, models and papers endpoints.
+- `auth_service`: authentication, RBAC, admin audit, channel visibility and user
+  reactions.
+- `frontend`: Core Analytics, Quality Lab, Experimental and Admin/Settings UI.
+
+The main UI should prioritize product metrics: topic volume, spread, freshness,
+growth/trend, sentiment balance, key actors, first source, source confidence,
+novelty, importance and review status. Technical operations metrics such as
+Kafka offsets, consumer lag and raw service health belong in ops/admin/debug
+surfaces, not in primary analyst cards.
+
+### Quality Layer
+
+Purpose: close the quality loop when a topic is wrong, uncertain or novel.
+
+Implemented or partially implemented pieces:
+
+- `analytics_api/analytics_api/topic_review.py`: review tasks and actions.
+- `analytics_api/analytics_api/annotation.py`: annotation tasks and dataset
+  support.
+- `dataset_builder/`: versioned dataset artifact builder.
+- `topic_benchmark_runner/`: topic benchmark experiments.
+- `analytics_api/analytics_api/mlops.py`: validation, preview, candidate model
+  records, model registry helpers and explicit deploy helpers.
+- `training_orchestrator/`: polling worker for candidate training jobs; current
+  implementation may be MVP/mock depending on configuration.
+
+Planned/future when needed:
+
+- Separate production-grade trainer service.
+- Separate evaluator service with quality gates.
+- Separate deployment controller with rollout/canary automation.
+- Full artifact storage integration and model lineage UI beyond the current MVP.
+
+### Experimental Layer
+
+Purpose: research workflows that may later become product capabilities.
+
+Implemented pieces:
+
+- Scientific paper detection.
+- Paper parsing.
+- Paper summarization.
+- Paper API/UI.
+
+Planned/future:
+
+- Broader research ingestion sources.
+- Full paper quality workflow.
+- Integration with the main topic intelligence loop if productized.
+
+## 3. Current Service Inventory
+
+| Component | Current status | Role |
+|---|---|---|
+| `rbc_telegram_collector` | Implemented | Telegram collection/backfill |
+| `message_persister` | Implemented | Raw-message persistence |
+| `preprocessor` | Implemented | Text preprocessing |
+| `sentiment_analyzer` | Implemented | Sentiment/emotion enrichment |
+| `ner_extractor` | Implemented | Entity extraction and normalization |
+| `source_resolver` | Implemented | Source/provenance resolution |
+| `topic_clusterer` | Implemented | Topic assignments, pipeline and novelty |
+| `topic_scorer` | Implemented | Topic importance scoring |
+| `llm_enricher` | Implemented | Summaries, labels and actor/timeline enrichment |
+| `analytics_api` | Implemented | Analyst, Quality Lab and Experimental APIs |
+| `auth_service` | Implemented | Auth, RBAC, admin/audit and source admin |
+| `frontend` | Implemented | Next.js user interface |
+| `dataset_builder` | Implemented/MVP | Dataset artifacts for Quality Lab |
+| `topic_benchmark_runner` | Implemented | Topic benchmark experiments |
+| `training_orchestrator` | MVP/mock-capable | Candidate training job worker |
+| `paper_detector` | Experimental | Scientific-paper detection |
+| `paper_parser` | Experimental | Paper parsing |
+| `paper_summarizer` | Experimental | Paper summarization |
+| `model_trainer` | Planned/future as separate service | Logical capability currently covered by MVP flow |
+| `model_evaluator` | Planned/future as separate service | Logical capability currently covered by MVP flow |
+| `model_deployer` | Planned/future as separate service | Explicit deploy helper exists in API |
+| `graph-builder` | Logical/planned unless deployed separately | Graph update aggregation |
+| `neo4j-writer` | Logical/planned unless deployed separately | Graph write application |
+
+## 4. Data Flow
 
 ```text
 Telegram channels
-    │
-    ▼
-rbc_telegram_collector -> kafka_bridge
-    │
-    ▼
-raw.telegram.messages
-    ├─► message_persister ─► persisted.messages
-    └─► preprocessor (raw + persisted) ─► preprocessed.messages
-             ├─► sentiment_analyzer ─► sentiment.enriched
-             ├─► ner_extractor      ─► ner.enriched
-             └─► topic_clusterer    ─► topic.assignments
-                                           └─► topic_novelty_detector
-                                                   └─► topic.novelty.candidates
-                                                           └─► active_learning_sampler
-                                                                   └─► topic.labeling.tasks
-                                                                           └─► annotation_gateway
-                                                                                   └─► topic.labels
-                                                                                           └─► dataset_builder
-                                                                                                   └─► ml.training.jobs
-                                                                                                           └─► training_orchestrator
-                                                                                                                   └─► model_trainer
-                                                                                                                           └─► ml.training.results
-                                                                                                                                   └─► model_evaluator
-                                                                                                                                           └─► model_registry
-                                                                                                                                                   └─► model_deployer
-                                                                                                                                                           └─► topic_clusterer (new model version)
+  -> rbc_telegram_collector
+  -> raw.telegram.messages
+  -> message_persister
+  -> PostgreSQL raw_messages
 
-sentiment.enriched + ner.enriched
-    └─► graph-builder ─► graph.updates ─► neo4j-writer ─► Neo4j
+raw/persisted messages
+  -> preprocessor
+  -> preprocessed.messages
+  -> sentiment_analyzer / ner_extractor / topic_clusterer
+  -> sentiment_results / ner_results / cluster assignments
 
-PostgreSQL + Neo4j
-    └─► analytics_api ─► frontend
-auth_service
-    └─► frontend
+topic assignments
+  -> novelty and importance scoring
+  -> source/provenance and LLM/baseline enrichment
+  -> analytics_api
+  -> frontend Core Analytics
+
+uncertain or disputed topics
+  -> review
+  -> annotation
+  -> dataset
+  -> benchmark or candidate training
+  -> explicit model deploy
 ```
 
-## 5. Кластеризация тем
+## 5. Storage
 
-Тематический контур реализован как последовательность:
+### PostgreSQL
 
-1. Векторизация `preprocessed.messages` через Sentence-BERT.
-2. Группировка сообщений по временным окнам (`window_hours`).
-3. Снижение размерности UMAP (`metric=cosine`).
-4. Кластеризация HDBSCAN (`cluster_selection_method=leaf`).
-5. Формирование `topic.assignments` с полями:
-   - `topic_id` (кластер),
-   - `confidence` / `cluster_probability`,
-   - `run_id`,
-   - `model_version`,
-   - `event_timestamp`.
-6. Сохранение результатов в `cluster_assignments`, запусков в `cluster_runs_pg`, публикация `topic.assignments`, экспорт в Parquet.
+PostgreSQL stores operational and analytic records, including:
 
-Параметры кластеризации управляются конфигурацией сервиса и версионируются вместе с `run_id`.
+- raw and preprocessed messages;
+- sentiment and entity results;
+- topic runs and assignments;
+- source/provenance data;
+- topic importance, novelty, summaries and comparison data;
+- review, annotation and dataset tables;
+- benchmark and candidate model lifecycle tables;
+- auth/admin/channel data;
+- scientific paper metadata.
 
-## 6. Определение новизны тем
+### Neo4j
 
-### 6.1 Логика детекции
+Neo4j is used for graph-oriented exploration around messages, channels, topics
+and entities. Graph analytics may be served from Neo4j and/or cached analytic
+tables depending on deployment.
 
-Сервис `topic_novelty_detector` оценивает новизну темы по комбинации сигналов:
+### Artifact storage
 
-- outlier-сигнал (`topic_id = -1`/noise);
-- низкая уверенность кластера (`cluster_probability < threshold`);
-- слабое соответствие историческим кластерам;
-- быстрый рост нового кластера в коротком временном окне;
-- дрейф распределения эмбеддингов относительно базового окна.
+Dataset exports, benchmark outputs and model artifacts are intended to live in
+object/artifact storage. Local MVP flows may use local paths or mock artifacts.
 
-Результат публикуется в `topic.novelty.candidates` и содержит:
+## 6. UI Positioning
 
-- `novelty_score`,
-- `novelty_reason`,
-- `cluster_snapshot`,
-- `model_version`,
-- `trace_id`.
+The UI should keep the product hierarchy explicit:
 
-### 6.2 Связь с дообучением
+- Core Analytics: Dashboard, Topics, Feed, Entities, Graph, Sources.
+- Quality Lab: Review, Annotation, Datasets, Topic benchmark experiments,
+  Candidate training, Models.
+- Experimental: Papers.
+- Admin/Settings: Settings, channel admin and audit.
 
-Кандидаты новизны проходят human-in-the-loop контур:
+Datasets are Quality Lab artifacts. Training is a controlled candidate-training
+flow. Models are candidates/registry entries until explicitly accepted and
+deployed. Papers are Experimental.
 
-1. отбор кейсов (`active_learning_sampler`);
-2. разметка (`annotation_gateway`);
-3. сбор датасета (`dataset_builder`);
-4. обучение и оценка (`model_trainer` + `model_evaluator`);
-5. регистрация и деплой (`model_registry` + `model_deployer`).
+## 7. Reliability And Ops
 
-Это обеспечивает замкнутый жизненный цикл тем: появление новой темы -> подтверждение -> адаптация модели -> улучшенное распознавание.
+Implemented reliability patterns include:
 
-## 7. Хранилища и данные
+- idempotent persistence and processed-event tracking;
+- retry/DLQ conventions in event services;
+- health and metrics endpoints in services where implemented;
+- Docker/Docker Compose configuration for local infrastructure;
+- tests covering core contracts, topic pipeline, scoring, review, annotation,
+  benchmark, MLOps MVP and paper modules.
 
-### 7.1 PostgreSQL
-
-Ключевые таблицы:
-
-- `raw_messages`;
-- `preprocessed_messages`;
-- `sentiment_results`;
-- `ner_results`;
-- `entity_relations`;
-- `cluster_runs_pg`;
-- `cluster_assignments`;
-- `processed_events`;
-- `outbox`;
-- `topic_label_tasks`, `topic_labels`, `model_versions`, `model_eval_reports`.
-
-### 7.2 Neo4j
-
-Графовые объекты:
-
-- узлы: `Message`, `Entity`, `Channel`, `Topic`;
-- связи: `POSTED_IN`, `MENTIONED_IN`, `RELATES_TO`, `CO_OCCURS_WITH`, `BELONGS_TO_TOPIC`.
-
-### 7.3 Объектное хранилище
-
-- версии датасетов для обучения;
-- артефакты обученных моделей;
-- манифесты и метаданные релизов.
-
-## 8. API и пользовательская часть
-
-### 8.1 Auth Service
-
-Реализует:
-
-- регистрацию/вход/refresh/logout;
-- профиль и восстановление пароля;
-- административные операции;
-- аудит и реакции пользователей.
-
-### 8.2 Analytics API
-
-Предоставляет:
-
-- обзор кластеров;
-- документы кластера;
-- связанные темы;
-- топ-сущности;
-- динамику тональности;
-- графовые выборки для UI.
-
-### 8.3 Frontend
-
-Поддерживает прикладные сценарии:
-
-- лента сообщений;
-- обзор тем и карточка кластера;
-- сущности;
-- графовый обзор;
-- диагностика новых тем;
-- административные страницы.
-
-## 9. Наблюдаемость и надежность
-
-Платформа реализует эксплуатационный контур:
-
-- health/metrics endpoints у процессоров;
-- Prometheus + Grafana для метрик и алертов;
-- Kafka UI для контроля топиков и consumer groups;
-- Neo4j Browser для контроля графовой модели.
-
-Надежность обеспечивается за счет:
-
-- идемпотентности (`processed_events` + `UNIQUE`);
-- retry с exponential backoff;
-- DLQ-топиков;
-- асинхронной декомпозиции через Kafka;
-- canary/rollback в контуре деплоя моделей.
-
-## 10. Результат реализации
-
-Система реализована как единый технологический контур, в котором каждое сообщение проходит путь:
-
-`внешний поток -> событие -> нормализация -> NLP-обогащение -> тема/новизна -> граф -> API -> пользовательский интерфейс`,
-
-а контур дообучения обеспечивает адаптацию тематических моделей к новым и дрейфующим сюжетам.
+Operational metrics such as service health, consumer lag, Kafka offsets and raw
+processor metrics should be exposed through ops/admin/debug tooling. They should
+not dominate the main analyst dashboard.

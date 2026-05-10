@@ -102,6 +102,18 @@ class ModelConfig(BaseModel):
     version: str = "1.0.0"
 
 
+class CanonicalResolutionConfig(BaseModel):
+    """Config for the canonical entity resolution layer."""
+
+    enable_canonical_resolution: bool = True
+    enable_llm_ner: bool = False
+    enable_embedding_match: bool = False
+    fuzzy_threshold: float = 0.88
+    auto_create_threshold: float = 0.85
+    link_threshold: float = 0.70
+    resolver_cache_size: int = 4096
+
+
 class AppConfig(BaseModel):
     service_name: str = "ner-extractor"
     consumer_id: str = "ner-extractor"
@@ -115,6 +127,7 @@ class AppConfig(BaseModel):
     schemas: SchemaConfig = SchemaConfig()
     logging: LoggingConfig = LoggingConfig()
     models: ModelsConfig = ModelsConfig()
+    canonical: CanonicalResolutionConfig = CanonicalResolutionConfig()
 
 
 class EnvConfig(BaseSettings):
@@ -136,6 +149,7 @@ class EnvConfig(BaseSettings):
     schemas: Optional[SchemaConfig] = None
     logging: Optional[LoggingConfig] = None
     models: Optional[ModelsConfig] = None
+    canonical: Optional[CanonicalResolutionConfig] = None
 
 
 def _deep_update(base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:

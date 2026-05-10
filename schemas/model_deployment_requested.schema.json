@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tg-news.local/schemas/model_deployment_requested.schema.json",
+  "title": "Model Deployment Requested",
+  "type": "object",
+  "required": ["event_id", "event_type", "event_timestamp", "event_version", "source_system", "payload"],
+  "properties": {
+    "event_id": { "type": "string" },
+    "event_type": { "const": "model_deployment_requested" },
+    "event_timestamp": { "type": "string", "format": "date-time" },
+    "event_version": { "type": "string" },
+    "source_system": { "type": "string" },
+    "trace_id": { "type": "string" },
+    "payload": {
+      "type": "object",
+      "required": ["model_version_id", "model_type", "consent_to_deploy"],
+      "properties": {
+        "model_version_id": { "type": "string" },
+        "model_type": {
+          "enum": ["topic_classifier", "sentiment_classifier", "embedding_model", "ner_model"]
+        },
+        "requested_by": { "type": ["string", "null"] },
+        "consent_to_deploy": { "const": true }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

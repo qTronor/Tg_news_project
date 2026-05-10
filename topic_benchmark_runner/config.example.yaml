@@ -1,0 +1,19 @@
+postgres:
+  host: localhost
+  port: 5432
+  database: telegram_news
+  user: postgres
+  password: postgres
+
+benchmark:
+  default_models:
+    - sbert_umap_hdbscan
+    - lda
+    - nmf
+  embedding_model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+  max_messages: 2500
+  min_messages: 30
+  n_topics: 12
+  seed: 42
+  use_gpu: false
+  worker_poll_interval_seconds: 15

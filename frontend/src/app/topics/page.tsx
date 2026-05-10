@@ -100,17 +100,36 @@ export default function TopicsPage() {
                         <Sparkline data={topic.sparkline} width={200} height={32} />
                       </div>
 
-                      <div className="mt-3 flex items-center gap-1 flex-wrap">
-                        {topic.top_entities.slice(0, 3).map(e => (
-                          <Badge key={e.id} variant="entity" color={entityTypeColor(e.type)} className="text-[10px]">
-                            {e.text}
-                          </Badge>
-                        ))}
+                      <div className="mt-3 grid gap-2 text-xs">
+                        <div>
+                          <div className="mb-1 font-medium uppercase tracking-wide text-muted-foreground">Attention</div>
+                          <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                            <ImportanceBadge level={topic.importance_level} score={topic.importance_score} />
+                            {topic.novelty_status && <Badge className="text-[10px]">{topic.novelty_status}</Badge>}
+                            <span>{t("topics.sentiment")}: {topic.avg_sentiment.toFixed(2)}</span>
+                          </div>
+                        </div>
+                        <div>
+                          <div className="mb-1 font-medium uppercase tracking-wide text-muted-foreground">Context</div>
+                          <div className="flex flex-wrap items-center gap-1">
+                            {topic.top_keywords.slice(0, 4).map(keyword => (
+                              <Badge key={keyword} className="text-[10px]">
+                                {keyword}
+                              </Badge>
+                            ))}
+                            {topic.top_entities.slice(0, 3).map(e => (
+                              <Badge key={e.id} variant="entity" color={entityTypeColor(e.type)} className="text-[10px]">
+                                {e.text}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2 text-muted-foreground">
+                          <span>Quality: {topic.review?.status || (topic.confidence_score != null ? `confidence ${topic.confidence_score.toFixed(2)}` : "not reviewed")}</span>
+                          {topic.source_status && <span>Source: {topic.source_status}</span>}
+                        </div>
                       </div>
 
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        {t("topics.sentiment")}: {topic.avg_sentiment.toFixed(2)}
-                      </p>
                     </Card>
                   </motion.div>
                 </Link>
@@ -134,6 +153,11 @@ export default function TopicsPage() {
                         {topic.source_status && <SourceStatusBadge status={topic.source_status} />}
                       </div>
                       <div className="flex items-center gap-1">
+                        {topic.top_keywords.slice(0, 2).map(keyword => (
+                          <Badge key={keyword} className="text-[10px]">
+                            {keyword}
+                          </Badge>
+                        ))}
                         {topic.top_entities.slice(0, 2).map(e => (
                           <Badge key={e.id} variant="entity" color={entityTypeColor(e.type)} className="text-[10px]">
                             {e.text}

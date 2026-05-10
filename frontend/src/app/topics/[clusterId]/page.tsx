@@ -12,6 +12,7 @@ import {
   Gauge,
   GitBranch,
   Hash,
+  ListChecks,
   Loader2,
   Network,
   Radio,
@@ -21,6 +22,7 @@ import {
   Sparkles,
   Split,
   TrendingUp,
+  Users,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Header } from "@/components/layout/header";
@@ -34,20 +36,17 @@ import { SourceStatusBadge } from "@/components/topics/source-status-badge";
 import { VolumeLineChart } from "@/components/charts/volume-line";
 import { ChannelBarChart } from "@/components/charts/channel-bar";
 import { SentimentDonutChart } from "@/components/charts/sentiment-donut";
-import { useLlmEnrichment, useTopicComparison, useTopicDetail, useTopicGraphMetrics, useTopicTimeline, useTopics } from "@/lib/use-data";
+import { useTopicComparison, useTopicDetail, useTopicGraphMetrics, useTopicSummary, useTopicTimeline, useTopics } from "@/lib/use-data";
 import { api } from "@/lib/api";
 import { cn, entityTypeColor, formatNumber } from "@/lib/utils";
 import type {
   ClusterId,
-  ClusterExplanationResult,
-  ClusterSummaryResult,
-  LlmEnrichmentResponse,
-  NoveltyExplanationResult,
   Topic,
   TopicComparisonResult,
   TopicDetail,
   TopicGraphAnalytics,
   TopicGraphMetricsApiResponse,
+  TopicSummaryBundle,
   TopicTimelineAnnotation,
   TopicTimelineApiEvent,
 } from "@/types";
@@ -65,6 +64,14 @@ interface MetricItem {
 function formatDateTime(value?: string | null) {
   if (!value) return "n/a";
   return format(parseISO(value), "dd MMM HH:mm");
+}
+
+function formatAge(value?: string | null) {
+  if (!value) return "n/a";
+  const hours = Math.max(0, Math.round((Date.now() - parseISO(value).getTime()) / 36e5));
+  if (hours < 1) return "<1h";
+  if (hours < 48) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
 }
 
 function formatPercent(value?: number | null, signed = false) {
@@ -111,16 +118,52 @@ function normalizeGraphAnalytics(
 function normalizeTimelineAnnotations(
   detail: TopicDetail,
   timelineEvents?: TopicTimelineApiEvent[] | null,
+  timelinePoints?: import("@/types").TopicTimelineApiPoint[] | null,
 ): TopicTimelineAnnotation[] {
   if ((detail.timeline_annotations || []).length > 0) return detail.timeline_annotations || [];
-  return (timelineEvents || []).map((event) => ({
-    time: event.event_time,
-    label: event.summary,
-    description: event.event_type.replaceAll("_", " "),
-  }));
+  if ((timelineEvents || []).length > 0) {
+    return (timelineEvents || []).map((event) => ({
+      time: event.event_time,
+      label: event.summary,
+      description: event.event_type.replaceAll("_", " "),
+    }));
+  }
+  // Derive synthetic milestones from volume points when no evolution events exist
+  const points = timelinePoints || [];
+  if (points.length === 0) return [];
+  const annotations: TopicTimelineAnnotation[] = [];
+  annotations.push({
+    time: points[0].bucket_start,
+    label: `Topic started · ${points[0].message_count} msg`,
+    description: "first activity",
+  });
+  let peakIdx = 0;
+  for (let i = 1; i < points.length; i++) {
+    if (points[i].message_count > points[peakIdx].message_count) peakIdx = i;
+  }
+  if (peakIdx > 0) {
+    annotations.push({
+      time: points[peakIdx].bucket_start,
+      label: `Peak · ${points[peakIdx].message_count} msg`,
+      description: "volume peak",
+    });
+  }
+  if (points.length > 1) {
+    const last = points[points.length - 1];
+    if (last.bucket_start !== points[peakIdx].bucket_start) {
+      annotations.push({
+        time: last.bucket_start,
+        label: `Latest · ${last.message_count} msg`,
+        description: "most recent bucket",
+      });
+    }
+  }
+  return annotations.sort((a, b) => a.time.localeCompare(b.time));
 }
 
 function deriveNoveltyScore(detail: TopicDetail) {
+  if (detail.novelty_score !== undefined && detail.novelty_score !== null) return detail.novelty_score;
+  if (detail.novelty?.novelty_score !== undefined && detail.novelty?.novelty_score !== null) return detail.novelty.novelty_score;
   const direct = detail.kpi_metrics?.novelty_score;
   if (direct !== undefined && direct !== null) return direct;
   const components = detail.score_breakdown?.components as Record<string, { normalized?: number; raw?: number }> | undefined;
@@ -141,6 +184,10 @@ function latestDelta(points: TopicDetail["volume_timeline"]) {
   const current = points[points.length - 1]?.count || 0;
   if (previous === 0) return null;
   return (current - previous) / previous;
+}
+
+function formatSentimentBalance(breakdown: TopicDetail["sentiment_breakdown"]) {
+  return `${breakdown.positive}/${breakdown.neutral}/${breakdown.negative}`;
 }
 
 function statusLabel(detail: TopicDetail) {
@@ -509,198 +556,328 @@ const NOVELTY_COLORS: Record<string, string> = {
   resurgent: "text-amber-600 bg-amber-500/15 dark:text-amber-400",
 };
 
-function LlmBlock({
-  title,
-  response,
-  children,
-}: {
-  title: string;
-  response: LlmEnrichmentResponse | undefined;
-  children: (result: Record<string, unknown>) => ReactNode;
-}) {
-  if (!response) {
-    return (
-      <div className="flex min-h-[80px] items-center justify-center border border-border bg-muted/25 text-xs text-muted-foreground">
-        Loading…
-      </div>
-    );
-  }
-  if (response.status === "pending") {
-    return (
-      <div className="flex min-h-[80px] items-center justify-center border border-border bg-muted/25 text-xs text-muted-foreground">
-        Computing in background — click Refresh above to generate now.
-      </div>
-    );
-  }
-  if (response.status === "error" || response.status === "budget_exhausted") {
-    const msg = response.status === "budget_exhausted"
-      ? "Daily LLM budget reached. Try again tomorrow."
-      : "Generation failed. Click Refresh to retry.";
-    return (
-      <div className="flex min-h-[80px] items-center justify-center border border-dashed border-destructive/50 bg-destructive/5 text-xs text-muted-foreground">
-        {msg}
-      </div>
-    );
-  }
-  if (!response.result) {
-    return (
-      <div className="flex min-h-[80px] items-center justify-center border border-dashed border-border bg-muted/15 text-xs text-muted-foreground">
-        No insight payload was returned.
-      </div>
-    );
-  }
+function SummaryCard({ title, children, isBaseline }: { title: string; children: ReactNode; isBaseline?: boolean }) {
   return (
     <div className="border border-border bg-card p-4">
-      <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</div>
-      {children(response.result)}
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</span>
+        {isBaseline && (
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">без LLM</span>
+        )}
+      </div>
+      {children}
     </div>
   );
 }
 
-function AiInsightsSection({ clusterId }: { clusterId: string }) {
+function TopicSummarySection({ clusterId }: { clusterId: string }) {
   const queryClient = useQueryClient();
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const { data: bundle, isLoading, error } = useTopicSummary(clusterId);
 
-  const summaryQuery = useLlmEnrichment(clusterId, "cluster_summary");
-  const explanationQuery = useLlmEnrichment(clusterId, "cluster_explanation");
-  const noveltyQuery = useLlmEnrichment(clusterId, "novelty_explanation");
-
-  const anyOk = [summaryQuery, explanationQuery, noveltyQuery].some(
-    (q) => q.data?.status === "ok"
-  );
-  const metaSource = [summaryQuery, explanationQuery, noveltyQuery].find(
-    (q) => q.data?.status === "ok"
-  )?.data;
-
-  async function handleRefresh() {
-    setIsRefreshing(true);
+  async function handleRegenerate() {
+    setIsRegenerating(true);
     try {
-      const [s, e, n] = await Promise.allSettled([
-        api.refreshLlmEnrichment(clusterId, "cluster_summary"),
-        api.refreshLlmEnrichment(clusterId, "cluster_explanation"),
-        api.refreshLlmEnrichment(clusterId, "novelty_explanation"),
-      ]);
-      if (s.status === "fulfilled") {
-        queryClient.setQueryData(["llmEnrichment", clusterId, "cluster_summary"], s.value);
-      }
-      if (e.status === "fulfilled") {
-        queryClient.setQueryData(["llmEnrichment", clusterId, "cluster_explanation"], e.value);
-      }
-      if (n.status === "fulfilled") {
-        queryClient.setQueryData(["llmEnrichment", clusterId, "novelty_explanation"], n.value);
-      }
+      const result = await api.regenerateTopicSummary(clusterId);
+      queryClient.setQueryData(["topicSummary", clusterId, "ru"], result);
+    } catch {
+      // error visible in UI on next render
     } finally {
-      setIsRefreshing(false);
+      setIsRegenerating(false);
     }
   }
 
+  const { summaries, model, generated_at } = (bundle ?? {}) as Partial<TopicSummaryBundle>;
+
   return (
-    <SectionShell
-      title="AI Insights"
-      description="Natural-language analysis generated by Mistral. Not a substitute for primary analytics."
-    >
-      <div className="space-y-4">
-        <div className="flex items-center justify-between gap-3 border border-border bg-muted/20 px-4 py-2.5">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Sparkles className="h-3.5 w-3.5 text-primary" />
-            {anyOk && metaSource ? (
-              <span>
-                {metaSource.model?.name ?? "Mistral"} · {metaSource.language ?? "?"}{" "}
-                ({metaSource.analysis_mode ?? "?"})
-                {metaSource.cached && (
-                  <span className="ml-2 text-primary">· cached</span>
-                )}
-              </span>
-            ) : (
-              <span>Mistral · not yet generated</span>
-            )}
-          </div>
-          <button
-            onClick={handleRefresh}
-            disabled={isRefreshing}
-            className="flex items-center gap-1.5 rounded border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
-          >
-            {isRefreshing ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <RefreshCw className="h-3 w-3" />
-            )}
-            {isRefreshing ? "Generating…" : "Refresh"}
-          </button>
+    <SectionShell title="Краткая сводка" description="AI-сводка на основе ключевых сообщений и данных темы">
+      <div className="flex items-center justify-between gap-3 border border-border bg-muted/20 px-4 py-2.5">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Sparkles className="h-3.5 w-3.5 text-primary" />
+          {model ? (
+            <span>{model.name} · {generated_at ? formatDateTime(generated_at) : "—"}</span>
+          ) : (
+            <span>Сводка не сгенерирована</span>
+          )}
         </div>
+        <button
+          onClick={handleRegenerate}
+          disabled={isRegenerating || isLoading}
+          className="flex items-center gap-1.5 rounded border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+        >
+          {isRegenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+          {isRegenerating ? "Генерация…" : "Обновить сводку"}
+        </button>
+      </div>
 
-        <LlmBlock title="Summary" response={summaryQuery.data}>
-          {(result) => {
-            const r = result as unknown as ClusterSummaryResult;
-            return (
-              <div className="space-y-3">
-                <p className="text-sm leading-6 text-foreground">{r.summary}</p>
-                {r.key_points?.length > 0 && (
-                  <ul className="space-y-1">
-                    {r.key_points.map((point, i) => (
-                      <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
-                        <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
-                        {point}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            );
-          }}
-        </LlmBlock>
+      {isLoading && (
+        <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          Генерация сводки…
+        </div>
+      )}
 
-        <div className="grid gap-4 lg:grid-cols-2">
-          <LlmBlock title="Why important" response={explanationQuery.data}>
-            {(result) => {
-              const r = result as unknown as ClusterExplanationResult;
-              const maxWeight = Math.max(0.001, ...r.drivers.map((d) => d.weight));
-              return (
-                <div className="space-y-4">
-                  <p className="text-sm leading-6 text-foreground">{r.why_important}</p>
-                  {r.drivers?.length > 0 && (
+      {!isLoading && (error || !bundle) && (
+        <EmptyAnalyticState>Сводка пока недоступна. Нажмите «Обновить сводку».</EmptyAnalyticState>
+      )}
+
+      {!isLoading && bundle && summaries && (
+        <div className="space-y-4">
+          <div className="grid gap-4 lg:grid-cols-3">
+            <SummaryCard title="Сводка" isBaseline={summaries.short?.status === "ok_baseline"}>
+              {summaries.short ? (
+                <div className="space-y-2">
+                  <p className="text-sm leading-6 text-foreground">{summaries.short.summary}</p>
+                  {summaries.short.key_points?.length > 0 && (
+                    <ul className="mt-2 space-y-1">
+                      {summaries.short.key_points.map((point, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
+                          <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+                          {point}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Нет данных</p>
+              )}
+            </SummaryCard>
+
+            <SummaryCard title="Хронология">
+              {summaries.timeline?.events?.length ? (
+                <div className="space-y-3">
+                  {summaries.timeline.events.map((event, i) => (
+                    <div key={i} className="border-l-2 border-primary pl-3">
+                      <div className="text-xs text-muted-foreground">{event.when}</div>
+                      <div className="mt-0.5 text-sm text-foreground">{event.what}</div>
+                      {event.source_channel && (
+                        <div className="mt-0.5 text-xs text-muted-foreground">@{event.source_channel}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Нет данных</p>
+              )}
+            </SummaryCard>
+
+            <SummaryCard title="Ключевые акторы" isBaseline={summaries.key_actors?.status === "ok_baseline"}>
+              {summaries.key_actors?.actors?.length ? (
+                <div className="space-y-3">
+                  {summaries.key_actors.actors.map((actor, i) => (
+                    <div key={i} className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-foreground">{actor.name}</span>
+                        {actor.role && (
+                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{actor.role}</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">{actor.why_matters}</p>
+                      {actor.mention_count > 0 && (
+                        <p className="text-[10px] text-muted-foreground">{actor.mention_count} упоминаний</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Нет данных</p>
+              )}
+            </SummaryCard>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <SummaryCard title="Почему важно">
+              {summaries.why_important ? (
+                <div className="space-y-3">
+                  <p className="text-sm leading-6 text-foreground">{summaries.why_important.why_important}</p>
+                  {summaries.why_important.drivers?.length > 0 && (
                     <div className="space-y-2">
-                      {r.drivers.map((driver, i) => (
-                        <div key={i} className="space-y-1">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-xs font-medium text-foreground truncate">{driver.name}</span>
-                            <span className="text-xs text-muted-foreground shrink-0">{(driver.weight * 100).toFixed(0)}%</span>
+                      {summaries.why_important.drivers.map((driver, i) => (
+                        <div key={i} className="flex items-start gap-2">
+                          <span className="mt-0.5 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                            {Math.round(driver.weight * 100)}%
+                          </span>
+                          <div>
+                            <span className="text-xs font-medium text-foreground">{driver.name}</span>
+                            <p className="text-xs text-muted-foreground">{driver.explanation}</p>
                           </div>
-                          <div className="h-1 bg-muted rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-primary rounded-full"
-                              style={{ width: `${(driver.weight / maxWeight) * 100}%` }}
-                            />
-                          </div>
-                          <p className="text-xs text-muted-foreground leading-4">{driver.explanation}</p>
                         </div>
                       ))}
                     </div>
                   )}
                 </div>
-              );
-            }}
-          </LlmBlock>
+              ) : (
+                <p className="text-sm text-muted-foreground">Нет данных</p>
+              )}
+            </SummaryCard>
 
-          <LlmBlock title="Novelty verdict" response={noveltyQuery.data}>
-            {(result) => {
-              const r = result as unknown as NoveltyExplanationResult;
-              return (
+            <SummaryCard title="Что изменилось">
+              {summaries.what_changed ? (
+                <div className="space-y-3">
+                  <p className="text-sm leading-6 text-foreground">{summaries.what_changed.summary}</p>
+                  {summaries.what_changed.changes?.length > 0 && (
+                    <div className="space-y-2">
+                      {summaries.what_changed.changes.map((change, i) => (
+                        <div key={i} className="border-l-2 border-border pl-3">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">{change.period}</span>
+                            <span className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
+                              {Math.round(change.severity * 100)}%
+                            </span>
+                          </div>
+                          <p className="mt-0.5 text-sm text-foreground">{change.change_description}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Нет данных</p>
+              )}
+            </SummaryCard>
+
+            <SummaryCard title="Новизна">
+              {summaries.novelty ? (
                 <div className="space-y-3">
                   <span
                     className={cn(
                       "inline-flex rounded px-2 py-0.5 text-xs font-semibold uppercase tracking-wide",
-                      NOVELTY_COLORS[r.novelty_verdict] ?? "bg-muted text-muted-foreground"
+                      NOVELTY_COLORS[summaries.novelty.novelty_verdict] ?? "bg-muted text-muted-foreground"
                     )}
                   >
-                    {NOVELTY_LABELS[r.novelty_verdict] ?? r.novelty_verdict}
+                    {NOVELTY_LABELS[summaries.novelty.novelty_verdict] ?? summaries.novelty.novelty_verdict}
                   </span>
-                  <p className="text-sm leading-6 text-foreground">{r.rationale}</p>
+                  <p className="text-sm leading-6 text-foreground">{summaries.novelty.rationale}</p>
                 </div>
-              );
-            }}
-          </LlmBlock>
+              ) : (
+                <p className="text-sm text-muted-foreground">Нет данных</p>
+              )}
+            </SummaryCard>
+          </div>
         </div>
+      )}
+    </SectionShell>
+  );
+}
+
+function TopicNoveltyPanel({ detail }: { detail: TopicDetail }) {
+  const novelty = detail.novelty;
+  const newEntities = novelty?.explanation?.new_entities ?? [];
+  const reasons = novelty?.explanation?.reasons ?? [];
+  const features = novelty?.features ?? {};
+  const firstChannels = (detail.top_channels?.length ? detail.top_channels : detail.channels).slice(0, 5);
+  const history = detail.similar_history ?? [];
+
+  return (
+    <SectionShell title="Novelty" description="Multi-signal explanation against historical topics, entities, sources and dynamics.">
+      <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+        <Card className="rounded-none">
+          <CardHeader>
+            <CardTitle>Why this topic is new</CardTitle>
+          </CardHeader>
+          <div className="flex items-center gap-3">
+            <div className="flex h-14 w-14 items-center justify-center rounded-md bg-primary/10 text-primary">
+              <Sparkles className="h-6 w-6" />
+            </div>
+            <div>
+              <div className="text-2xl font-semibold text-foreground">
+                {formatScore(novelty?.novelty_score ?? detail.novelty_score) || "Pending"}
+              </div>
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                {novelty?.novelty_status ?? detail.novelty_status ?? "not scored"}
+              </div>
+            </div>
+          </div>
+          {novelty?.explanation?.summary && (
+            <p className="mt-4 text-sm leading-6 text-foreground">{novelty.explanation.summary}</p>
+          )}
+          <div className="mt-4 space-y-2">
+            {reasons.length > 0 ? reasons.slice(0, 4).map((reason) => (
+              <div key={reason} className="border-l-2 border-primary pl-3 text-sm text-muted-foreground">
+                {reason}
+              </div>
+            )) : (
+              <EmptyAnalyticState>Novelty explanation is not available yet.</EmptyAnalyticState>
+            )}
+          </div>
+        </Card>
+
+        <div className="grid gap-6 md:grid-cols-2">
+          <Card className="rounded-none">
+            <CardHeader>
+              <CardTitle>Feature scores</CardTitle>
+            </CardHeader>
+            <div className="space-y-2">
+              {Object.entries(features).length > 0 ? Object.entries(features).map(([name, value]) => (
+                <div key={name} className="flex items-center justify-between gap-3">
+                  <span className="text-xs text-muted-foreground">{name.replaceAll("_", " ")}</span>
+                  <span className="font-mono text-xs text-foreground">{Number(value).toFixed(2)}</span>
+                </div>
+              )) : (
+                <EmptyAnalyticState>No feature breakdown was returned.</EmptyAnalyticState>
+              )}
+            </div>
+          </Card>
+
+          <Card className="rounded-none">
+            <CardHeader>
+              <CardTitle>New entities</CardTitle>
+            </CardHeader>
+            <div className="flex flex-wrap gap-2">
+              {newEntities.length > 0 ? newEntities.slice(0, 12).map((entity) => (
+                <Badge key={entity}>{entity}</Badge>
+              )) : (
+                <span className="text-sm text-muted-foreground">No unseen entities detected.</span>
+              )}
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      <div className="mt-6 grid gap-6 xl:grid-cols-[0.7fr_1.3fr]">
+        <Card className="rounded-none">
+          <CardHeader>
+            <CardTitle>First channels</CardTitle>
+          </CardHeader>
+          <div className="space-y-2">
+            {firstChannels.map((channel) => (
+              <div key={channel.channel} className="flex items-center justify-between text-sm">
+                <span className="truncate text-foreground">{channel.channel}</span>
+                <span className="text-muted-foreground">{channel.count}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="rounded-none">
+          <CardHeader>
+            <CardTitle>Similar historical topics</CardTitle>
+          </CardHeader>
+          <div className="space-y-3">
+            {history.length > 0 ? history.map((item) => (
+              <Link key={item.cluster_id} href={`/topics/${item.cluster_id}`}>
+                <div className="grid gap-2 border border-border px-3 py-2 transition-colors hover:bg-accent md:grid-cols-[1fr_auto]">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-foreground">{item.cluster_id}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {formatNumber(item.message_count)} messages · {formatDateTime(item.first_seen)} - {formatDateTime(item.last_seen)}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {item.keywords.slice(0, 4).map((keyword) => <Badge key={keyword}>{keyword}</Badge>)}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-semibold text-foreground">{item.overall_similarity.toFixed(2)}</div>
+                    <div className="text-[11px] uppercase text-muted-foreground">similarity</div>
+                  </div>
+                </div>
+              </Link>
+            )) : (
+              <EmptyAnalyticState>No historical similarity links were found.</EmptyAnalyticState>
+            )}
+          </div>
+        </Card>
       </div>
     </SectionShell>
   );
@@ -712,7 +889,7 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
   const { preset } = useGlobalTimeRange();
   const { data: detail, isLoading } = useTopicDetail(clusterId);
   const { data: topics = [] } = useTopics();
-  const timelineBucket = preset === "7d" || preset === "30d" ? "day" : "hour";
+  const timelineBucket = preset === "7d" || preset === "30d" ? "1d" : "1h";
   const timelineQuery = useTopicTimeline(clusterId, timelineBucket);
   const graphMetricsQuery = useTopicGraphMetrics(clusterId);
   const comparisonQuery = useTopicComparison(clusterId, compareClusterId);
@@ -746,7 +923,7 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
 
   const sourceDisplay = detail.first_source?.display_source;
   const graph = normalizeGraphAnalytics(detail, graphMetricsQuery.data);
-  const timelineAnnotations = normalizeTimelineAnnotations(detail, timelineQuery.data?.events);
+  const timelineAnnotations = normalizeTimelineAnnotations(detail, timelineQuery.data?.events, timelineQuery.data?.points);
   const noveltyScore = deriveNoveltyScore(detail);
   const volumeTimeline = detail.volume_timeline.length > 0
     ? detail.volume_timeline
@@ -761,11 +938,12 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
   const summary =
     detail.summary ||
     `${formatNumber(detail.message_count)} messages across ${detail.channel_count} channels since ${formatDateTime(detail.first_seen)}.`;
+  const firstSource =
+    detail.source_provenance?.first_source_channel || sourceDisplay?.source_channel || "Unknown";
+  const topActor = detail.top_entities[0]?.text || "No entities";
+  const reviewStatus = detail.review?.status || (detail.confidence_score != null && detail.confidence_score < 0.55 ? "needs review" : "not reviewed");
 
-  const kpiMetrics: MetricItem[] = [
-    { label: "Messages", value: formatNumber(detail.message_count), hint: "Cluster volume", icon: <Hash className="h-4 w-4" /> },
-    { label: "Channels", value: formatNumber(detail.channel_count), hint: "Distinct publishers", icon: <Radio className="h-4 w-4" /> },
-    { label: "Avg sentiment", value: detail.avg_sentiment.toFixed(2), hint: "Mean message score", icon: <Activity className="h-4 w-4" /> },
+  const attentionMetrics: MetricItem[] = [
     {
       label: "Importance",
       value: detail.importance_score != null ? `${detail.importance_score.toFixed(2)} (${detail.importance_level})` : formatScore(detail.kpi_metrics?.importance_score),
@@ -780,34 +958,65 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
       icon: <CircleDot className="h-4 w-4" />,
     },
     {
-      label: "Growth rate",
+      label: "Growth",
       value: formatPercent(growth, true),
-      hint: detail.kpi_metrics?.growth_rate === undefined ? "Estimated from timeline" : "Backend metric",
+      hint: detail.kpi_metrics?.growth_rate === undefined ? "Estimated from latest volume buckets" : "Volume trend",
       icon: <TrendingUp className="h-4 w-4" />,
     },
+    { label: "Volume", value: formatNumber(detail.message_count), hint: "Messages in this topic", icon: <Hash className="h-4 w-4" /> },
+  ];
+
+  const contextMetrics: MetricItem[] = [
+    { label: "Spread", value: formatNumber(detail.channel_count), hint: "Distinct channels", icon: <Radio className="h-4 w-4" /> },
     {
-      label: "Communities",
-      value: graph?.communities_count,
-      hint: "Graph analytics",
-      icon: <Network className="h-4 w-4" />,
+      label: "Freshness",
+      value: formatAge(detail.last_seen),
+      hint: `${formatDateTime(detail.first_seen)} -> ${formatDateTime(detail.last_seen)}`,
+      icon: <RefreshCw className="h-4 w-4" />,
     },
     {
-      label: "Graph density",
-      value: graph?.density !== undefined && graph?.density !== null ? graph.density.toFixed(3) : null,
-      hint: "Edges over possible edges",
-      icon: <Share2 className="h-4 w-4" />,
+      label: "First source",
+      value: firstSource,
+      hint: `First seen ${formatDateTime(detail.source_provenance?.first_seen || sourceDisplay?.source_message_date || detail.first_seen)}`,
+      icon: <ShieldCheck className="h-4 w-4" />,
+    },
+    { label: "Key actor", value: topActor, hint: "Top mentioned entity", icon: <Users className="h-4 w-4" /> },
+  ];
+
+  const moodMetrics: MetricItem[] = [
+    { label: "Avg sentiment", value: detail.avg_sentiment.toFixed(2), hint: "Mean message score", icon: <Activity className="h-4 w-4" /> },
+    {
+      label: "Balance",
+      value: formatSentimentBalance(detail.sentiment_breakdown),
+      hint: "Positive / neutral / negative",
+      icon: <Split className="h-4 w-4" />,
+    },
+  ];
+
+  const qualityMetrics: MetricItem[] = [
+    {
+      label: "Confidence",
+      value: formatScore(detail.confidence_score),
+      hint: "Topic assignment confidence",
+      icon: <ShieldCheck className="h-4 w-4" />,
     },
     {
-      label: "Bridge nodes",
-      value: graph?.bridge_nodes_count,
-      hint: "Cross-community connectors",
-      icon: <GitBranch className="h-4 w-4" />,
+      label: "Review status",
+      value: reviewStatus,
+      hint: detail.review?.source ? `Source: ${detail.review.source}` : "Human review state",
+      icon: <ListChecks className="h-4 w-4" />,
     },
     {
       label: "Source confidence",
       value: formatPercent(sourceConfidence),
       hint: "Exact or inferred provenance",
       icon: <ShieldCheck className="h-4 w-4" />,
+    },
+    {
+      label: "Stability",
+      value: formatScore(detail.stability_score),
+      hint: "Quality signal for cluster consistency",
+      icon: <GitBranch className="h-4 w-4" />,
     },
   ];
 
@@ -885,12 +1094,79 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
             </div>
           </section>
 
-          <SectionShell title="KPI metrics" description="Primary decision metrics for the selected topic. Pending cells are ready for backend fields.">
-            <div className="grid overflow-hidden border border-border sm:grid-cols-2 lg:grid-cols-5">
-              {kpiMetrics.map((metric, index) => (
-                <MetricTile key={metric.label} metric={metric} index={index} />
-              ))}
+          <TopicSummarySection clusterId={clusterId} />
+
+          <SectionShell title="Topic metrics" description="Grouped by analyst intent: attention, context, mood and quality.">
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Attention</h3>
+                <div className="grid overflow-hidden border border-border sm:grid-cols-2">
+                  {attentionMetrics.map((metric, index) => (
+                    <MetricTile key={metric.label} metric={metric} index={index} />
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Context</h3>
+                <div className="grid overflow-hidden border border-border sm:grid-cols-2">
+                  {contextMetrics.map((metric, index) => (
+                    <MetricTile key={metric.label} metric={metric} index={index} />
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Mood</h3>
+                <div className="grid overflow-hidden border border-border sm:grid-cols-2">
+                  {moodMetrics.map((metric, index) => (
+                    <MetricTile key={metric.label} metric={metric} index={index} />
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Quality</h3>
+                <div className="grid overflow-hidden border border-border sm:grid-cols-2">
+                  {qualityMetrics.map((metric, index) => (
+                    <MetricTile key={metric.label} metric={metric} index={index} />
+                  ))}
+                </div>
+              </div>
             </div>
+          </SectionShell>
+
+          <TopicNoveltyPanel detail={detail} />
+
+          <SectionShell title="Quality diagnostics" description="Technical reproducibility metadata is available for audit and debugging, outside the primary analyst metrics.">
+            <details className="border border-border bg-card p-4">
+              <summary className="cursor-pointer text-sm font-medium text-foreground">Model run details</summary>
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="border border-border bg-card p-4">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Embedding model</div>
+                  <div className="mt-2 break-words text-sm font-medium text-foreground">{detail.model?.embedding_model || "Unknown"}</div>
+                </div>
+                <div className="border border-border bg-card p-4">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Run version</div>
+                  <div className="mt-2 text-sm font-medium text-foreground">{detail.model?.model_version || "Unknown"}</div>
+                </div>
+                <div className="border border-border bg-card p-4">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Config hash</div>
+                  <div className="mt-2 font-mono text-sm text-foreground">{detail.model?.config_hash || "Pending"}</div>
+                </div>
+                <div className="border border-border bg-card p-4">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Dataset version</div>
+                  <div className="mt-2 text-sm font-medium text-foreground">{detail.model?.dataset_version || "Unknown"}</div>
+                </div>
+              </div>
+              {detail.model?.config && (
+                <div className="mt-3 grid gap-2 md:grid-cols-4">
+                  {["n_neighbors", "n_components", "min_cluster_size", "min_samples", "top_n_words", "nr_topics", "seed"].map((key) => (
+                    <div key={key} className="border border-border bg-card px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{key}</div>
+                      <div className="mt-1 text-sm text-foreground">{String(detail.model?.config?.[key] ?? "n/a")}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </details>
           </SectionShell>
 
           <SectionShell title="Dynamics" description="Volume trend, growth signal and timeline events.">
@@ -927,6 +1203,22 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
           </SectionShell>
 
           <SectionShell title="Structure" description="Topic composition by entities, channels, related clusters and sentiment.">
+            {detail.top_keywords.length > 0 && (
+              <Card className="mb-6 rounded-none">
+                <CardHeader>
+                  <CardTitle>Keywords</CardTitle>
+                  <p className="mt-1 text-xs text-muted-foreground">c-TF-IDF terms from topic model · filtered to content words ≥ 4 chars</p>
+                </CardHeader>
+                <div className="flex flex-wrap gap-2">
+                  {detail.top_keywords
+                    .filter((kw) => kw.length >= 4 && !/^\d+$/.test(kw))
+                    .slice(0, 20)
+                    .map((keyword) => (
+                      <Badge key={keyword}>{keyword}</Badge>
+                    ))}
+                </div>
+              </Card>
+            )}
             <div className="grid gap-6 xl:grid-cols-[1fr_1fr_0.8fr]">
               <Card className="rounded-none">
                 <CardHeader>
@@ -1006,9 +1298,19 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
             />
           </SectionShell>
 
-          <SectionShell title="Graph analytics" description="Network-level metrics for structure, communities and bridges.">
-              {graph ? (
+          <SectionShell title="Graph analytics" description="Co-occurrence network of NER entities and channels within this topic (computed from PostgreSQL, not Neo4j).">
+            {graphMetricsQuery.isLoading ? (
+              <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Computing graph metrics…
+              </div>
+            ) : graph ? (
               <div className="space-y-4">
+                {graphMetricsQuery.data?.summary?.is_small_graph && (
+                  <div className="border border-amber-500/40 bg-amber-500/10 px-4 py-2.5 text-xs text-amber-700 dark:text-amber-300">
+                    Small graph · fewer than 3 nodes or 2 edges — metrics like density and communities may not be meaningful at this scale.
+                  </div>
+                )}
                 <div className="grid overflow-hidden border border-border sm:grid-cols-2 lg:grid-cols-5">
                   {graphMetrics.map((metric, index) => (
                     <MetricTile key={metric.label} metric={metric} index={index} />
@@ -1017,21 +1319,25 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
                 <div className="grid gap-4 lg:grid-cols-3">
                   <div className="border border-border bg-card p-4">
                     <div className="text-xs uppercase tracking-wide text-muted-foreground">Top central entity</div>
-                    <div className="mt-2 text-sm font-semibold text-foreground">{graph.top_central_entity?.text || "Pending"}</div>
+                    <div className="mt-2 text-sm font-semibold text-foreground">{graph.top_central_entity?.text || "—"}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">Highest PageRank in entity co-occurrence graph</div>
                   </div>
                   <div className="border border-border bg-card p-4">
                     <div className="text-xs uppercase tracking-wide text-muted-foreground">Top central channel</div>
-                    <div className="mt-2 text-sm font-semibold text-foreground">{graph.top_central_channel?.channel || "Pending"}</div>
+                    <div className="mt-2 text-sm font-semibold text-foreground">{graph.top_central_channel?.channel || "—"}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">Most connected channel by PageRank</div>
                   </div>
                   <div className="border border-border bg-card p-4">
                     <div className="text-xs uppercase tracking-wide text-muted-foreground">Graph summary</div>
-                    <div className="mt-2 text-sm text-foreground">{graph.summary || "No graph summary returned."}</div>
+                    <div className="mt-2 text-sm text-foreground">{graph.summary || "—"}</div>
                   </div>
                 </div>
               </div>
             ) : (
               <EmptyAnalyticState>
-                Graph analytics were not returned by the API yet. The section is reserved for nodes, edges, communities, bridge nodes, central hubs and density.
+                {graphMetricsQuery.error
+                  ? "Failed to load graph metrics — NER data may not be available for this topic."
+                  : "No entity co-occurrence data found for this topic in the selected time window."}
               </EmptyAnalyticState>
             )}
           </SectionShell>
@@ -1041,8 +1347,6 @@ export default function TopicDetailPage({ params }: { params: Promise<{ clusterI
               <ImportanceBreakdownPanel breakdown={detail.score_breakdown} level={detail.importance_level} score={detail.importance_score} />
             </SectionShell>
           )}
-
-          <AiInsightsSection clusterId={clusterId} />
 
           <SectionShell title="Source and provenance" description="Attribution, first seen signal and propagation evidence are treated as analytic inputs.">
             <SourcePanel source={detail.first_source} />

@@ -137,11 +137,85 @@ CLUSTER_LABEL_SCHEMA: dict[str, Any] = {
     },
 }
 
+TIMELINE_SUMMARY_SCHEMA: dict[str, Any] = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "required": ["events"],
+    "additionalProperties": False,
+    "properties": {
+        "events": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+                "type": "object",
+                "required": ["when", "what"],
+                "additionalProperties": False,
+                "properties": {
+                    "when": {"type": "string"},
+                    "what": {"type": "string", "maxLength": 300},
+                    "source_channel": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
+KEY_ACTORS_SUMMARY_SCHEMA: dict[str, Any] = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "required": ["actors"],
+    "additionalProperties": False,
+    "properties": {
+        "actors": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+                "type": "object",
+                "required": ["name", "role", "why_matters", "mention_count"],
+                "additionalProperties": False,
+                "properties": {
+                    "name": {"type": "string"},
+                    "role": {"type": "string", "maxLength": 120},
+                    "why_matters": {"type": "string", "maxLength": 300},
+                    "mention_count": {"type": "integer", "minimum": 0},
+                },
+            },
+        },
+    },
+}
+
+WHAT_CHANGED_RECENTLY_SCHEMA: dict[str, Any] = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "required": ["summary", "changes"],
+    "additionalProperties": False,
+    "properties": {
+        "summary": {"type": "string", "maxLength": 600},
+        "changes": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+                "type": "object",
+                "required": ["period", "change_description", "severity"],
+                "additionalProperties": False,
+                "properties": {
+                    "period": {"type": "string"},
+                    "change_description": {"type": "string", "maxLength": 300},
+                    "severity": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                },
+            },
+        },
+    },
+}
+
 OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "cluster_summary": CLUSTER_SUMMARY_SCHEMA,
     "cluster_explanation": CLUSTER_EXPLANATION_SCHEMA,
     "novelty_explanation": NOVELTY_EXPLANATION_SCHEMA,
     "cluster_label": CLUSTER_LABEL_SCHEMA,
+    "timeline_summary": TIMELINE_SUMMARY_SCHEMA,
+    "key_actors_summary": KEY_ACTORS_SUMMARY_SCHEMA,
+    "what_changed_recently": WHAT_CHANGED_RECENTLY_SCHEMA,
 }
 
 SUPPORTED_ENRICHMENT_TYPES = frozenset(OUTPUT_SCHEMAS.keys())
@@ -151,4 +225,10 @@ MAX_TOKENS: dict[str, int] = {
     "cluster_explanation": 600,
     "novelty_explanation": 300,
     "cluster_label": 100,
+    "timeline_summary": 600,
+    "key_actors_summary": 500,
+    "what_changed_recently": 500,
 }
+
+# Types that have an extractive fallback when LLM is unavailable
+EXTRACTIVE_FALLBACK_TYPES = frozenset({"cluster_summary", "key_actors_summary"})

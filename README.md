@@ -1,5 +1,21 @@
 # Telegram News Pipeline - Data Contracts
 
+## User-Consented Model Training
+
+The project includes an MVP MLOps contour for labelled datasets:
+
+`dataset -> validation -> training preview -> consent_to_train -> queued/running job -> evaluation -> candidate model -> consent_to_deploy -> production model`.
+
+Important safety rules:
+
+- Annotation never starts training automatically.
+- `POST /analytics/training/jobs` requires `consent_to_train: true`.
+- A trained model is registered as `candidate` and never replaces production automatically.
+- `POST /analytics/models/{id}/deploy` requires `consent_to_deploy: true`.
+- Previous production model versions are stored for rollback.
+
+See `docs/model-training.md` for API examples, worker startup and inference integration.
+
 Полная спецификация контрактов данных для event-driven конвейера обработки новостей из Telegram.
 
 ## 📋 Содержание

@@ -126,6 +126,15 @@
                   "type": "string"
                 }
               },
+              "canonical_id": {
+                "type": ["string", "null"],
+                "format": "uuid",
+                "description": "UUID of the canonical entity record in entity_canonical table"
+              },
+              "canonical_name": {
+                "type": ["string", "null"],
+                "description": "Preferred display name of the canonical entity"
+              },
               "metadata": {
                 "type": "object",
                 "description": "Additional entity metadata",

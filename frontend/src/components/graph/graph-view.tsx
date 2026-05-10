@@ -164,7 +164,7 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
 
   const clearSelection = useCallback(() => {
     const cy = cyRef.current;
-    cy?.elements().removeClass("highlighted faded hovered");
+    cy?.elements().removeClass("highlighted faded hovered source-origin source-self");
     cy?.nodes().unselect();
     setSelectedNode(null);
   }, []);
@@ -189,7 +189,14 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
           sourceStatus: n.source_status,
           sourceEventId: n.source_event_id,
           sourceChannel: n.source_channel,
+          noveltyStatus: n.novelty_status,
+          noveltyScore: n.novelty_score,
+          isFirstSource: n.is_first_source,
         },
+        classes: [
+          n.novelty_status === "new" ? "new-topic" : "",
+          n.is_first_source ? "first-source" : "",
+        ].filter(Boolean).join(" "),
       })),
       ...data.edges
         .filter(e =>
@@ -252,6 +259,29 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
           style: {
             width: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("nodeType"), ele.data("weight")) + 5,
             height: (ele: cytoscape.NodeSingular) => nodeSize(ele.data("nodeType"), ele.data("weight")) + 5,
+          },
+        },
+        {
+          selector: "node.new-topic",
+          style: {
+            "border-width": 4,
+            "border-color": "#55d6b2",
+            "border-opacity": 0.95,
+          },
+        },
+        {
+          selector: "node.first-source, node.source-origin, node.source-self",
+          style: {
+            "border-width": 4.5,
+            "border-color": "#f6d365",
+            "border-opacity": 1,
+            "z-index": 30,
+          },
+        },
+        {
+          selector: "node.source-self",
+          style: {
+            "border-color": "#a8e6a1",
           },
         },
         {
@@ -378,31 +408,52 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
       cy.layout(settleLayout).run();
     });
 
-    cy.on("tap", "node", (evt: EventObject) => {
-      const node = evt.target;
-      const nodeData: GraphNode = {
-        id: node.data("id"),
-        label: node.data("label"),
-        type: node.data("nodeType"),
-        weight: node.data("weight"),
-        community: node.data("community"),
-        channel: node.data("channel"),
-        message_id: node.data("messageId"),
-        message_date: node.data("messageDate"),
-        cluster_id: node.data("clusterId"),
-        permalink: node.data("permalink"),
-        source_status: node.data("sourceStatus"),
-        source_event_id: node.data("sourceEventId"),
-        source_channel: node.data("sourceChannel"),
-      };
-      setSelectedNode(nodeData);
-      onNodeClick?.(nodeData);
+    const graphNodeFromCy = (node: cytoscape.NodeSingular): GraphNode => ({
+      id: node.data("id"),
+      label: node.data("label"),
+      type: node.data("nodeType"),
+      weight: node.data("weight"),
+      community: node.data("community"),
+      channel: node.data("channel"),
+      message_id: node.data("messageId"),
+      message_date: node.data("messageDate"),
+      cluster_id: node.data("clusterId"),
+      permalink: node.data("permalink"),
+      source_status: node.data("sourceStatus"),
+      source_event_id: node.data("sourceEventId"),
+      source_channel: node.data("sourceChannel"),
+      novelty_status: node.data("noveltyStatus"),
+      novelty_score: node.data("noveltyScore"),
+      is_first_source: Boolean(node.data("isFirstSource")),
+      is_focus_source: node.hasClass("source-origin") || node.hasClass("source-self"),
+      is_self_source: node.hasClass("source-self"),
+    });
 
-      cy.elements().removeClass("highlighted faded");
-      const neighborhood = node.neighborhood().add(node);
+    const highlightSelection = (node: cytoscape.NodeSingular) => {
+      cy.elements().removeClass("highlighted faded source-origin source-self");
+
+      let neighborhood = node.neighborhood().add(node);
+      const sourceEventId = node.data("sourceEventId");
+      const sourceNode = sourceEventId ? cy.getElementById(`msg-${sourceEventId}`) : null;
+
+      if (sourceNode?.length) {
+        sourceNode.addClass(sourceNode.same(node) ? "source-self" : "source-origin");
+        sourceNode.addClass("highlighted");
+        sourceNode.connectedEdges().addClass("highlighted");
+        neighborhood = neighborhood.add(sourceNode);
+      }
+
       neighborhood.addClass("highlighted");
       node.connectedEdges().addClass("highlighted");
       cy.elements().not(neighborhood).addClass("faded");
+    };
+
+    cy.on("tap", "node", (evt: EventObject) => {
+      const node = evt.target;
+      highlightSelection(node);
+      const nodeData = graphNodeFromCy(node);
+      setSelectedNode(nodeData);
+      onNodeClick?.(nodeData);
     });
 
     cy.on("tap", (evt: EventObject) => {
@@ -422,25 +473,8 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
             zoom: 1.5,
           });
           focusNode.select();
-          const neighborhood = focusNode.neighborhood().add(focusNode);
-          neighborhood.addClass("highlighted");
-          focusNode.connectedEdges().addClass("highlighted");
-          cy.elements().not(neighborhood).addClass("faded");
-          setSelectedNode({
-            id: focusNode.data("id"),
-            label: focusNode.data("label"),
-            type: focusNode.data("nodeType"),
-            weight: focusNode.data("weight"),
-            community: focusNode.data("community"),
-            channel: focusNode.data("channel"),
-            message_id: focusNode.data("messageId"),
-            message_date: focusNode.data("messageDate"),
-            cluster_id: focusNode.data("clusterId"),
-            permalink: focusNode.data("permalink"),
-            source_status: focusNode.data("sourceStatus"),
-            source_event_id: focusNode.data("sourceEventId"),
-            source_channel: focusNode.data("sourceChannel"),
-          });
+          highlightSelection(focusNode);
+          setSelectedNode(graphNodeFromCy(focusNode));
         }, 1000);
       }
     }
@@ -529,6 +563,23 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
                     <SourceStatusBadge status={selectedNode.source_status} />
                   </div>
                 )}
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {selectedNode.novelty_status === "new" && (
+                    <span className="rounded-full border border-[#55d6b2]/45 bg-[#55d6b2]/12 px-2 py-0.5 text-[11px] font-medium text-[#bdf5e6]">
+                      New topic
+                    </span>
+                  )}
+                  {selectedNode.is_first_source && (
+                    <span className="rounded-full border border-[#f6d365]/45 bg-[#f6d365]/12 px-2 py-0.5 text-[11px] font-medium text-[#f8e6a6]">
+                      First source
+                    </span>
+                  )}
+                  {selectedNode.is_focus_source && !selectedNode.is_first_source && (
+                    <span className="rounded-full border border-[#f6d365]/45 bg-[#f6d365]/12 px-2 py-0.5 text-[11px] font-medium text-[#f8e6a6]">
+                      Source of selected news
+                    </span>
+                  )}
+                </div>
                 <h3 className="mt-2 text-sm font-semibold text-[#f5f7ff]">{selectedNode.label}</h3>
               </div>
               <button onClick={clearSelection} className="text-[#9aa2bf] transition-colors hover:text-[#f5f7ff]">
@@ -598,6 +649,12 @@ export function GraphView({ data, focusNodeId, onNodeClick }: Props) {
                 <div className="flex justify-between">
                   <span>First source</span>
                   <span className="font-medium text-[#f5f7ff]">{selectedNode.source_channel}</span>
+                </div>
+              )}
+              {selectedNode.novelty_score !== undefined && selectedNode.novelty_score !== null && (
+                <div className="flex justify-between">
+                  <span>Novelty</span>
+                  <span className="font-medium text-[#f5f7ff]">{Math.round(selectedNode.novelty_score * 100)}%</span>
                 </div>
               )}
               {"source_status" in selectedNode && selectedNode.source_status && (

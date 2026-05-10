@@ -201,19 +201,22 @@ class OnnxEmbeddingsBackend:
 def build_embeddings_backend(config) -> EmbeddingsBackend:
     """Factory: pick torch or onnx backend based on ``config.model``."""
     backend = getattr(config.model, "backend", "torch")
+    model_name = getattr(config.model, "embedding_model", None) or config.model.sbert_model
+    model_registry = getattr(config.model, "embedding_models", {}) or {}
+    model_name = model_registry.get(model_name, model_name)
     if backend == "onnx":
         onnx_path = getattr(config.model, "onnx_path", None)
         if not onnx_path:
             raise ValueError("model.onnx_path must be set when model.backend='onnx'")
         provider = getattr(config.model, "onnx_provider", "CPUExecutionProvider")
         return OnnxEmbeddingsBackend(
-            model_name=config.model.sbert_model,
+            model_name=model_name,
             onnx_path=onnx_path,
             provider=provider,
         )
     # default: torch
     return TorchEmbeddingsBackend(
-        model_name=config.model.sbert_model,
+        model_name=model_name,
         device=config.model.device,
         use_float16=config.model.use_float16,
         cache_dir=config.model.cache_dir,

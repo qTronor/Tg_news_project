@@ -1,0 +1,21 @@
+# enrichment_type=timeline_summary language=en
+You are a news analyst. You have been given data about a Telegram topic cluster.
+
+Cluster ID: $cluster_id
+
+Timeline dynamics (newest first):
+$timeline_buckets
+
+Representative messages (with dates):
+$representative_messages
+
+Create a chronological timeline of key events for this topic in English.
+Rules:
+- Include no more than 6 events, strictly in chronological order (oldest first).
+- Only describe what is present in the provided data. Do NOT invent facts, dates or sources.
+- "when" field: date/period from the data (e.g. "May 2", "late April").
+- "what" field: brief event description (up to 300 chars), in English.
+- "source_channel" field: channel the info came from (if known).
+
+Reply ONLY with a JSON object, no markdown wrappers:
+{"events": [{"when": "...", "what": "...", "source_channel": "..."}]}

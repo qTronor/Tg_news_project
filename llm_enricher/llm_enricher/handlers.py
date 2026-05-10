@@ -9,6 +9,7 @@ from typing import Any, Optional
 from llm_enricher.budget import DailyBudgetTracker
 from llm_enricher.cache import ComputedResult
 from llm_enricher.config import AppConfig
+from llm_enricher.extractive import extractive_key_actors, extractive_summary
 from llm_enricher.metrics import (
     CIRCUIT_BREAKER_OPEN,
     COST_USD,
@@ -22,6 +23,7 @@ from llm_enricher.providers.base import (
 )
 from llm_enricher.prompts import PromptRegistry
 from llm_enricher.schemas import (
+    EXTRACTIVE_FALLBACK_TYPES,
     MAX_TOKENS,
     OUTPUT_SCHEMAS,
     ClusterEnrichmentInput,
@@ -63,6 +65,24 @@ def _fmt_new_channels(buckets: list) -> str:
     return ", ".join(channels) if channels else "(none)"
 
 
+def _fmt_timeline_buckets(buckets: list) -> str:
+    if not buckets:
+        return "(none)"
+    lines = []
+    for b in buckets[:10]:
+        entities_preview = ""
+        if b.top_entities:
+            names = [e.get("normalized_text", "") for e in b.top_entities[:3] if isinstance(e, dict)]
+            entities_preview = ", ".join(n for n in names if n)
+        line = f"- {b.bucket_start}: {b.message_count} msgs, {b.unique_channel_count} channels"
+        if entities_preview:
+            line += f", entities: {entities_preview}"
+        if b.new_channels:
+            line += f", new: {', '.join(b.new_channels[:2])}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _fmt_novelty_features(features: Optional[dict]) -> str:
     if not features:
         return "(none)"
@@ -97,6 +117,8 @@ class EnrichmentHandler:
         estimated_in = len(prompt) // 4
         estimated_cost = self._budget.estimate_cost(estimated_in, self._max_tokens)
         if not await self._budget.check_and_reserve(estimated_cost):
+            if self._type in EXTRACTIVE_FALLBACK_TYPES:
+                return self._extractive_result(dto, prompt_version)
             return ComputedResult(
                 result_json=None,
                 status="budget_exhausted",
@@ -160,6 +182,8 @@ class EnrichmentHandler:
     def _error_result(
         self, msg: str, prompt_version: str, dto: ClusterEnrichmentInput, t0: float
     ) -> ComputedResult:
+        if self._type in EXTRACTIVE_FALLBACK_TYPES:
+            return self._extractive_result(dto, prompt_version, latency_ms=int((time.monotonic() - t0) * 1000))
         return ComputedResult(
             result_json=None,
             status="error",
@@ -171,6 +195,30 @@ class EnrichmentHandler:
             prompt_version=prompt_version,
             model_provider=self._provider.name,
             model_name=self._provider.model_name,
+            language=dto.language,
+            analysis_mode=dto.analysis_mode,
+        )
+
+    def _extractive_result(
+        self, dto: ClusterEnrichmentInput, prompt_version: str, latency_ms: int = 0
+    ) -> ComputedResult:
+        if self._type == "cluster_summary":
+            result_json = extractive_summary(dto.representative_messages, dto.language)
+        elif self._type == "key_actors_summary":
+            result_json = extractive_key_actors(dto.top_entities)
+        else:
+            result_json = {}
+        return ComputedResult(
+            result_json=result_json,
+            status="ok_baseline",
+            error_message=None,
+            tokens_input=0,
+            tokens_output=0,
+            cost_usd=0.0,
+            latency_ms=latency_ms,
+            prompt_version=prompt_version,
+            model_provider="extractive",
+            model_name="extractive_textrank_v1",
             language=dto.language,
             analysis_mode=dto.analysis_mode,
         )
@@ -210,6 +258,25 @@ class EnrichmentHandler:
                 top_entities=_fmt_entities(dto.top_entities),
                 representative_messages=_fmt_messages(dto.representative_messages),
             )
+        elif self._type == "timeline_summary":
+            return template.safe_substitute(
+                cluster_id=dto.public_cluster_id,
+                timeline_buckets=_fmt_timeline_buckets(dto.timeline_buckets),
+                representative_messages=_fmt_messages(dto.representative_messages),
+            )
+        elif self._type == "key_actors_summary":
+            return template.safe_substitute(
+                cluster_id=dto.public_cluster_id,
+                top_entities=_fmt_entities(dto.top_entities),
+                representative_messages=_fmt_messages(dto.representative_messages),
+            )
+        elif self._type == "what_changed_recently":
+            return template.safe_substitute(
+                cluster_id=dto.public_cluster_id,
+                timeline_buckets=_fmt_timeline_buckets(dto.timeline_buckets),
+                evolution_events=_fmt_evolution_events(dto.evolution_events),
+                representative_messages=_fmt_messages(dto.representative_messages),
+            )
         else:
             raise ValueError(f"Unknown enrichment_type: {self._type!r}")
 
@@ -223,5 +290,13 @@ def build_handlers(
     registry = PromptRegistry(prompts_root)
     return {
         etype: EnrichmentHandler(etype, provider, registry, budget, config)
-        for etype in ("cluster_summary", "cluster_explanation", "novelty_explanation", "cluster_label")
+        for etype in (
+            "cluster_summary",
+            "cluster_explanation",
+            "novelty_explanation",
+            "cluster_label",
+            "timeline_summary",
+            "key_actors_summary",
+            "what_changed_recently",
+        )
     }

@@ -1,47 +1,40 @@
-"use client";
+﻿"use client";
 
 import { use } from "react";
-import { useTranslation } from "@/lib/i18n";
+import { format, parseISO } from "date-fns";
+import Link from "next/link";
+import { ArrowLeft, ExternalLink, Loader2 } from "lucide-react";
+import { motion } from "framer-motion";
 import { Header } from "@/components/layout/header";
 import { PageTransition } from "@/components/layout/page-transition";
-import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { useEntities, useTopics, useMessages } from "@/lib/use-data";
-import { entityTypeColor, formatNumber } from "@/lib/utils";
-import { ArrowLeft, Share2, TrendingUp, TrendingDown, Minus, Loader2 } from "lucide-react";
-import { motion } from "framer-motion";
-import Link from "next/link";
+import { VolumeLineChart } from "@/components/charts/volume-line";
+import { EntityMergeDialog } from "@/components/EntityMergeDialog";
+import { useEntity, useEntityAliases, useEntityMentionTimeline } from "@/lib/use-data";
+import { useTranslation } from "@/lib/i18n";
+import { entityTypeColor } from "@/lib/utils";
 
-function entityGraphHref(entityId: string): string {
-  const params = new URLSearchParams({ focus: `ent-${entityId}` });
-  return `/graph?${params.toString()}`;
-}
-
-function safeDecodeURIComponent(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
+const SOURCE_LABEL: Record<string, string> = {
+  rule: "rule",
+  dictionary: "dict",
+  fuzzy: "fuzzy",
+  embedding: "embed",
+  manual: "manual",
+  model: "model",
+};
 
 export default function EntityDetailPage({ params }: { params: Promise<{ entityId: string }> }) {
+  const { entityId } = use(params);
   const { t } = useTranslation();
-  const { entityId: routeEntityId } = use(params);
-  const entityId = safeDecodeURIComponent(routeEntityId);
-  const { data: allEntities, isLoading: loadingEntities } = useEntities();
-  const { data: allTopics } = useTopics();
-  const { data: allMessages, isLoading: loadingMessages } = useMessages();
 
-  const messageEntity = (allMessages || [])
-    .flatMap((message) => message.entities || [])
-    .find((candidate) => candidate.id === entityId);
-  const entity = (allEntities || []).find(e => e.id === entityId) || messageEntity;
+  const { data: entity, isLoading: loadingEntity } = useEntity(entityId);
+  const { data: aliases = [] } = useEntityAliases(entityId);
+  const { data: timeline = [] } = useEntityMentionTimeline(entityId, "day");
 
-  if (loadingEntities || loadingMessages) {
+  if (loadingEntity) {
     return (
       <>
-        <Header title={t("entities.title")} />
+        <Header title="..." />
         <div className="flex items-center justify-center py-24">
           <Loader2 className="w-6 h-6 text-primary animate-spin" />
         </div>
@@ -52,133 +45,161 @@ export default function EntityDetailPage({ params }: { params: Promise<{ entityI
   if (!entity) {
     return (
       <>
-        <Header title={t("entities.title")} />
-        <PageTransition>
-          <div className="p-6 space-y-4">
-            <Link href="/entities" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
-              <ArrowLeft className="w-4 h-4" />
-              {t("entities.backToEntities")}
-            </Link>
-            <div className="bg-card rounded-xl border border-border p-6">
-              <p className="text-sm text-muted-foreground">Entity not found in the selected time range.</p>
-            </div>
-          </div>
-        </PageTransition>
+        <Header title="Not found" />
+        <div className="p-6">
+          <p className="text-muted-foreground">Entity not found.</p>
+          <Link href="/entities" className="mt-4 inline-flex items-center gap-1.5 text-sm text-primary hover:underline">
+            <ArrowLeft className="w-4 h-4" /> {t("entities.backToEntities")}
+          </Link>
+        </div>
       </>
     );
   }
 
-  const relatedTopics = (allTopics || []).filter(t =>
-    t.top_entities.some(e => e.id === entity.id || e.text === entity.text)
-  );
-  const relatedMessages = (allMessages || []).filter(m =>
-    m.entities?.some(e => e.id === entity.id || e.text === entity.text)
-  ).slice(0, 5);
-
-  const trendPct = entity.trend_pct || 0;
-  const TrendIcon = trendPct > 0 ? TrendingUp : trendPct < 0 ? TrendingDown : Minus;
-  const trendColor = trendPct > 0 ? "text-positive" : trendPct < 0 ? "text-negative" : "text-muted-foreground";
+  const displayName = entity.canonical_name || entity.text;
+  const altName = entity.canonical_name && entity.canonical_name !== entity.text ? entity.text : null;
+  const timelineData = timeline.map(p => ({ time: p.time, count: p.mention_count }));
+  const isMerged = Boolean(entity.merged_into_id);
 
   return (
     <>
-      <Header title={`${t("entities.title")}: ${entity.text}`} />
+      <Header title={displayName} />
       <PageTransition>
-        <div className="p-6 space-y-6">
-          <div className="flex items-center justify-between">
-            <Link href="/entities" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
-              <ArrowLeft className="w-4 h-4" />
-              {t("entities.backToEntities")}
-            </Link>
-            <Link href={entityGraphHref(entityId)}>
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                className="flex items-center gap-1.5 px-3 py-2 bg-muted rounded-lg text-sm text-foreground hover:bg-accent transition-colors"
-              >
-                <Share2 className="w-4 h-4" />
-                {t("entities.viewInGraph")}
-              </motion.button>
-            </Link>
-          </div>
+        <div className="p-6 space-y-6 max-w-4xl">
+          <Link
+            href="/entities"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            {t("entities.backToEntities")}
+          </Link>
+
+          {isMerged && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 dark:text-amber-400">
+              This entity has been merged into{" "}
+              <Link href={`/entities/${entity.merged_into_id}`} className="underline font-medium">
+                another entity
+              </Link>.
+            </div>
+          )}
 
           <motion.div
-            initial={{ opacity: 0, y: 10 }}
+            initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            className="bg-card rounded-xl border border-border p-6"
+            className="bg-card rounded-xl border border-border p-6 space-y-3"
           >
-            <div className="flex items-center gap-3">
-              <Badge variant="entity" color={entityTypeColor(entity.type)} className="text-base px-3 py-1">
-                {entity.type}
-              </Badge>
-              <h2 className="text-2xl font-bold text-foreground">{entity.text}</h2>
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <h1 className="text-2xl font-semibold text-foreground">{displayName}</h1>
+                {altName && (
+                  <p className="text-sm text-muted-foreground mt-0.5">{altName}</p>
+                )}
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge variant="entity" color={entityTypeColor(entity.type)}>
+                  {entity.type}
+                </Badge>
+                {!isMerged && (
+                  <EntityMergeDialog entityId={entityId} entityName={displayName} />
+                )}
+              </div>
             </div>
-            {entity.normalized && (
-              <p className="text-sm text-muted-foreground mt-2">{entity.normalized}</p>
-            )}
-            <div className="grid grid-cols-4 gap-4 mt-4">
-              <div>
-                <p className="text-xs text-muted-foreground">{t("entities.mentions")}</p>
-                <p className="text-xl font-bold text-foreground">{formatNumber(entity.mention_count || 0)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">{t("entities.topics")}</p>
-                <p className="text-xl font-bold text-foreground">{entity.topic_count || 0}</p>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">{t("entities.channels")}</p>
-                <p className="text-xl font-bold text-foreground">{entity.channel_count || 0}</p>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">{t("entities.trend")}</p>
-                <div className={`text-xl font-bold flex items-center gap-1 ${trendColor}`}>
-                  <TrendIcon className="w-5 h-5" />
-                  {trendPct > 0 ? "+" : ""}{trendPct}%
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2 border-t border-border">
+              <Stat label={t("entities.mentions")} value={entity.mention_count ?? "—"} />
+              <Stat label={t("entities.channels")} value={entity.channel_count ?? "—"} />
+              <Stat label={t("entities.topics")} value={entity.topic_count ?? "—"} />
+              {entity.wikidata_id ? (
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-xs text-muted-foreground uppercase tracking-wide">{t("entities.wikidataLink")}</span>
+                  <a
+                    href={`https://www.wikidata.org/wiki/${entity.wikidata_id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-primary hover:underline inline-flex items-center gap-1"
+                  >
+                    {entity.wikidata_id}
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
                 </div>
-              </div>
+              ) : (
+                <Stat label={t("entities.wikidataLink")} value="—" />
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+              {entity.first_seen_at && (
+                <MetaRow label={t("entities.firstSeen")} value={format(parseISO(entity.first_seen_at), "d MMM yyyy")} />
+              )}
+              {entity.last_seen_at && (
+                <MetaRow label={t("entities.lastSeen")} value={format(parseISO(entity.last_seen_at), "d MMM yyyy")} />
+              )}
+              {entity.source_model && (
+                <MetaRow label={t("entities.sourceModel")} value={entity.source_model} />
+              )}
             </div>
           </motion.div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card>
-              <CardHeader><CardTitle>{t("entities.relatedTopics")}</CardTitle></CardHeader>
-              <div className="space-y-2">
-                {relatedTopics.length > 0 ? relatedTopics.map(topic => (
-                  <Link key={topic.cluster_id} href={`/topics/${topic.cluster_id}`}>
-                    <motion.div
-                      whileHover={{ x: 4 }}
-                      className="flex items-center justify-between py-2 px-2 rounded-lg hover:bg-accent transition-colors"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm text-foreground">{topic.label}</span>
-                        {topic.is_new && <Badge variant="new">NEW</Badge>}
-                      </div>
-                      <span className="text-xs text-muted-foreground">{topic.message_count} {t("common.msgs")}</span>
-                    </motion.div>
-                  </Link>
-                )) : (
-                  <p className="text-sm text-muted-foreground">{t("entities.noRelatedTopics")}</p>
-                )}
-              </div>
-            </Card>
+          {timelineData.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.08 }}
+              className="bg-card rounded-xl border border-border p-5"
+            >
+              <h2 className="text-sm font-semibold text-foreground mb-4">{t("entities.mentionTimeline")}</h2>
+              <VolumeLineChart data={timelineData} />
+            </motion.div>
+          )}
 
-            <Card>
-              <CardHeader><CardTitle>{t("entities.recentMentions")}</CardTitle></CardHeader>
-              <div className="space-y-2">
-                {relatedMessages.length > 0 ? relatedMessages.map(m => (
-                  <div key={m.event_id} className="border-b border-border pb-2 last:border-0">
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <span className="font-medium text-foreground">{m.channel}</span>
-                    </div>
-                    <p className="text-sm text-foreground mt-1 line-clamp-2">{m.text}</p>
-                  </div>
-                )) : (
-                  <p className="text-sm text-muted-foreground">{t("entities.noRecentMentions")}</p>
-                )}
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.12 }}
+            className="bg-card rounded-xl border border-border p-5"
+          >
+            <h2 className="text-sm font-semibold text-foreground mb-3">{t("entities.aliases")}</h2>
+            {aliases.length === 0 ? (
+              <p className="text-sm text-muted-foreground">{t("entities.noAliases")}</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {aliases.map((a, i) => (
+                  <span
+                    key={i}
+                    title={`${t("entities.aliasSource")}: ${SOURCE_LABEL[a.source] ?? a.source}`}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border ${
+                      a.is_primary
+                        ? "bg-primary/10 text-primary border-primary/30"
+                        : "bg-muted text-muted-foreground border-transparent"
+                    }`}
+                  >
+                    {a.alias}
+                    <span className="opacity-50">{SOURCE_LABEL[a.source] ?? a.source}</span>
+                  </span>
+                ))}
               </div>
-            </Card>
-          </div>
+            )}
+          </motion.div>
         </div>
       </PageTransition>
     </>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-xs text-muted-foreground uppercase tracking-wide">{label}</span>
+      <span className="text-lg font-semibold text-foreground">{value}</span>
+    </div>
+  );
+}
+
+function MetaRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-xs text-muted-foreground uppercase tracking-wide">{label}</span>
+      <span className="text-sm text-foreground">{value}</span>
+    </div>
   );
 }

@@ -1,0 +1,26 @@
+kafka:
+  bootstrap_servers: "localhost:9092"
+  consumer_group: "paper-summarizer-group"
+  input_topic: "paper.parsed"
+  output_topic: "paper.summarized"
+  dlq_topic: "dlq.paper"
+  auto_offset_reset: "latest"
+
+postgres:
+  dsn: "postgresql://postgres:password@localhost:5432/telegram_news"
+  min_size: 2
+  max_size: 10
+  command_timeout: 30
+
+mistral:
+  api_key: ""
+  model: "mistral-small-latest"
+  base_url: "https://api.mistral.ai/v1"
+  timeout_seconds: 60
+  max_retries: 3
+
+service:
+  host: "0.0.0.0"
+  port: 8064
+  metrics_port: 8065
+  log_level: "INFO"

@@ -13,6 +13,7 @@ module.exports = {
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/src/$1",
   },
+  setupFilesAfterEnv: ["<rootDir>/jest.setup.ts"],
   testPathIgnorePatterns: ["/node_modules/", "/.next/", "/e2e/"],
   modulePathIgnorePatterns: ["<rootDir>/.next/"],
 };

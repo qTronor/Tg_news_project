@@ -209,6 +209,39 @@ services:
       - telegram-news-network
 
   # =====================================================
+  # Training Orchestrator - user-consented model training worker
+  # =====================================================
+  training-orchestrator:
+    build:
+      context: .
+      dockerfile: training_orchestrator/Dockerfile
+    container_name: telegram-news-training-orchestrator
+    command: ["python", "training_orchestrator/main.py", "--config", "training_orchestrator/config.example.yaml"]
+    ports:
+      - "${TRAINING_ORCHESTRATOR_PORT:-8040}:8040"
+    environment:
+      TRAINING_ORCHESTRATOR__POSTGRES__HOST: postgres
+      TRAINING_ORCHESTRATOR__POSTGRES__PORT: 5432
+      TRAINING_ORCHESTRATOR__POSTGRES__DATABASE: ${DB_NAME:-telegram_news}
+      TRAINING_ORCHESTRATOR__POSTGRES__USER: ${DB_USER:-postgres}
+      TRAINING_ORCHESTRATOR__POSTGRES__PASSWORD: ${DB_PASSWORD:?Database password required}
+      TRAINING_ORCHESTRATOR__SERVICE__POLL_INTERVAL_SECONDS: ${TRAINING_ORCHESTRATOR_POLL_INTERVAL_SECONDS:-5}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      analytics-api:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8040/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
+  # =====================================================
   # Auth Service - User Authentication & Authorization
   # =====================================================
   auth-service:
@@ -402,6 +435,30 @@ services:
     networks:
       - telegram-news-network
 
+  topic-benchmark-runner:
+    build:
+      context: .
+      dockerfile: topic_benchmark_runner/Dockerfile
+    container_name: telegram-news-topic-benchmark-runner
+    command: ["--config", "/app/config.example.yaml", "worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TOPIC_BENCHMARK__POSTGRES__HOST: postgres
+      TOPIC_BENCHMARK__POSTGRES__PORT: 5432
+      TOPIC_BENCHMARK__POSTGRES__DATABASE: ${DB_NAME:-telegram_news}
+      TOPIC_BENCHMARK__POSTGRES__USER: ${DB_USER:-postgres}
+      TOPIC_BENCHMARK__POSTGRES__PASSWORD: ${DB_PASSWORD:?Database password required}
+      TOPIC_BENCHMARK__BENCHMARK__MAX_MESSAGES: ${TOPIC_BENCHMARK_MAX_MESSAGES:-1500}
+      TOPIC_BENCHMARK__BENCHMARK__USE_GPU: ${TOPIC_BENCHMARK_USE_GPU:-false}
+      TOPIC_BENCHMARK__BENCHMARK__WORKER_POLL_INTERVAL_SECONDS: ${TOPIC_BENCHMARK_POLL_INTERVAL:-15}
+    volumes:
+      - topic_model_cache:/root/.cache/huggingface
+    restart: unless-stopped
+    networks:
+      - telegram-news-network
+
   # =====================================================
   # Telegram collector and raw persistence
   # =====================================================
@@ -540,6 +597,83 @@ services:
       - telegram-news-network
     profiles:
       - monitoring
+
+  paper-detector:
+    build:
+      context: ./paper_detector
+      dockerfile: Dockerfile
+    container_name: telegram-news-paper-detector
+    ports:
+      - "8060:8060"
+      - "8061:8061"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9093
+      POSTGRES_DSN: postgresql://postgres:${DB_PASSWORD:-postgres}@postgres:5432/telegram_news
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - telegram-news-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8060/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  paper-parser:
+    build:
+      context: ./paper_parser
+      dockerfile: Dockerfile
+    container_name: telegram-news-paper-parser
+    ports:
+      - "8062:8062"
+      - "8063:8063"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9093
+      POSTGRES_DSN: postgresql://postgres:${DB_PASSWORD:-postgres}@postgres:5432/telegram_news
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - telegram-news-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8062/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  paper-summarizer:
+    build:
+      context: ./paper_summarizer
+      dockerfile: Dockerfile
+    container_name: telegram-news-paper-summarizer
+    ports:
+      - "8064:8064"
+      - "8065:8065"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9093
+      POSTGRES_DSN: postgresql://postgres:${DB_PASSWORD:-postgres}@postgres:5432/telegram_news
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      MISTRAL_MODEL: ${MISTRAL_MODEL:-mistral-small-latest}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - telegram-news-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8064/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 # =====================================================
 # Volumes
